@@ -1,0 +1,9 @@
+spec_version: 1
+name: "kernelx"
+type: "environment"
+runtime: "python"
+app: "server/app.py"
+port: 8000
+metadata:
+  description: "KernelX: A high-performance Linux Kernel RL environment for scheduler optimization."
+  tags: ["rl", "kernel", "ebpf", "systems", "openenv"]

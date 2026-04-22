@@ -35,20 +35,26 @@ make load
 ```
 *Verification:* Run `make trace` to see the raw heartbeat of the kernel.
 
-### 3. Run the Rust Bridge (Telemetry)
-The Bridge converts raw kernel bytes into structured telemetry for the AI.
+### 3. Run the OpenEnv Server (Brain)
+The Brain is a standard **OpenEnv** environment that exposes the kernel telemetry via a FastAPI server.
 ```bash
-cd bridge
-cargo build
-sudo ./target/debug/kernelx-bridge
+cd brain
+# Install dependencies
+pip install -r server/requirements.txt
+# Start the OpenEnv server
+python -m server.app
 ```
-*Expected Output:* You should see a live stream of **24D Vectors** showing PIDs, Wait Latency (us), and VRuntime.
+*Verification:* Access `http://localhost:8000/docs` to see the OpenEnv API.
 
-### 4. Cleanup
-To safely detach the sensors from your kernel:
-```bash
-cd kernel
-make unload
+### 4. Connect the Agent
+You can now connect any AI agent using the `KernelXClient`:
+```python
+from brain import KernelXClient
+
+client = KernelXClient(url="http://localhost:8000")
+obs = client.reset()
+# The agent takes actions based on the 24D vector
+result = client.step(weights=[0.1, -0.2, 0.5, 0.0])
 ```
 
 ---
@@ -56,7 +62,10 @@ make unload
 ## 📂 Project Structure
 - `/kernel`: eBPF C code (The "Eyes").
 - `/bridge`: Rust Aya application (The "Nervous System").
-- `/brain`: Python Gymnasium & PyTorch (The "Intelligence").
+- `/brain`: **OpenEnv Implementation** (The "Intelligence").
+  - `openenv.yaml`: Environment manifest.
+  - `models.py`: Pydantic definitions for Action/Observation.
+  - `server/`: FastAPI server logic.
 - `/ui`: Ratatui TUI dashboard (The "Observability").
 - `implementation.md`: Technical deep-dive and math.
 - `plan.md`: Current team roadmap and task guide.
