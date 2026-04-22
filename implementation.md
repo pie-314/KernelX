@@ -19,7 +19,7 @@ KernelX operates as an ultra-low-latency closed-loop control system interacting 
        |                                           (Persistent WAL / Training Data) |
        |  (gRPC / Shared Memory / IPC)                                              |
        v                                                                            |
-[ Python Inference Server (env/vayu_gym.py) ]                                       |
+[ Python Inference Server (env/kernelx_gym.py) ]                                       |
        |                                                                            |
        |  (RL Forward Pass: PPO Agent)                                              |
        v                                                                            |
@@ -66,7 +66,7 @@ Where $r_t(\theta) = \frac{\pi_\theta(a_t|s_t)}{\pi_{\theta_{old}}(a_t|s_t)}$ an
 *   **Rust FFI:** Use `bindgen` in the `bridge/` to link `libradish.a` to the Rust bridge.
 
 ### Lead 2: AI ("The Brain")
-*   **Gym Environment:** Finish `brain/env/vayu_gym.py` conforming to the `gymnasium` API. `step(action)` must send IPC to Rust bridge, wait for execution, and return `(next_state, reward, done, info)`.
+*   **Gym Environment:** Finish `brain/env/kernelx_gym.py` conforming to the `gymnasium` API. `step(action)` must send IPC to Rust bridge, wait for execution, and return `(next_state, reward, done, info)`.
 *   **Imitation Learning (Shadow Mode):** Train the initial `strategist.pth` using supervised MSE loss against the default Linux CFS decisions to prevent initial system crashes.
 *   **PPO Loop:** Implement the RL loop using Ray/RLlib or Stable Baselines 3.
 

@@ -8,3 +8,4 @@ anyhow = "1.0"
 aya = "0.13"
 aya-log = "0.2"
 bytemuck = { version = "1.15", features = ["derive"] }
+ctrlc = "3.5.2"

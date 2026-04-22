@@ -1,156 +1,75 @@
 # KernelX: Cognitive Operating System Layer 🌪️
 
-**KernelX** is a "Wild Card" entry for the **Meta PyTorch OpenEnv Hackathon**. It re-imagines the Linux kernel as a partially observable, dynamic world, replacing static heuristics with a Multi-Agent Reinforcement Learning (MARL) system for real-time hardware optimization.
-
-
-
-## 🌌 The Vision
-Modern OS schedulers rely on decades-old hardcoded logic. KernelX introduces an intelligence plane that treats CPU, Cache, and I/O as finite resources in a competitive environment. By utilizing eBPF for reflexes and PyTorch for reasoning, KernelX achieves long-horizon optimization that adapts to shifting workloads and adversarial stress.
+**KernelX** is an autonomous intelligence plane for the Linux Kernel. It replaces static scheduling heuristics with a Reinforcement Learning loop that optimizes hardware state (CPU, Cache, I/O) in real-time.
 
 ---
 
-## 👥 The Vayu Trinity (Team Roles)
-* **AI Lead (Strategist):** Implements the PPO models in PyTorch and bridges the kernel data into an OpenEnv-compliant Gymnasium environment.
-* **Governance/Chaos (Auditor & Adversary):** Manages Scalable Oversight (Auditor) and the Chaos Monkey stressors (Adversary) to ensure system stability.
-* **Systems Lead (Sentinel):** Develops the eBPF probes in C and the memory-safe telemetry bridge in Rust using Aya.
+## 👥 The KernelX Trinity (Team Leads)
+*   **Systems Lead (Sentinel):** The "Metal" layer. eBPF sensors and Rust Bridge.
+*   **AI Lead (Strategist):** The "Brain" layer. PPO Agents and Gymnasium Environment.
+*   **Governance Lead (Auditor):** The "Safety" layer. Action clipping and TUI Monitoring.
 
 ---
 
-## 🛠️ Technology Stack
-| Layer | Component | Technology |
-| :--- | :--- | :--- |
-| **Reflexes** | Kernel Space | C (Restricted eBPF), `sched_ext` (SCX) |
-| **Nervous System** | Bridge | Rust (Aya), Zero-copy deserialization |
-| **Intelligence** | Brain | Python, PyTorch, OpenEnv, Unsloth |
-| **Persistence** | Experience Store | Rust (RadishDB - Custom WAL) |
-| **HUD** | Visualization | Rust (Ratatui) |
+## 🚀 Getting Started (The Metal Layer)
 
----
+This guide helps you build and test the **Perception Loop** (eBPF -> Rust Bridge).
 
-## 📐 Technical Architecture & Math
-
-### 1. Multi-Agent Interaction
-The swarm consists of three primary agents:
-* **The Sentinel (Perception):** Captures 24D state vectors ($S_t$) from the bare metal.
-* **The Strategist (Reasoning):** Maps hardware states to optimization actions ($A_t$).
-* **The Auditor (Safety):** Explains behavior and maintains OS bounds.
-
-### 2. The Reward Model ($R_t$)
-Our objective function balances throughput, tail latency, and compute cost:
-$$R_t = \alpha \cdot \log(\text{Throughput}_t) - \beta \cdot \text{Tail\_Latency}_t - \lambda \cdot \text{Cost}(a_t)$$
-
-### 3. World Modeling
-The agents maintain an internal representation of "Hardware Physics" by minimizing prediction error:
-$$\mathcal{L}_{world} = \mathbb{E} \left[ \| \hat{S}_{t+1} - S_{t+1} \|^2 \right]$$
-
----
-
-## 📂 Directory Structure
-```text
-kernelx/
-├── kernel/                 # eBPF Probes & SCX Actuators (C)
-├── bridge/                 # Aya Loader, Auditor, & WAL (Rust)
-├── brain/                  # OpenEnv Wrapper & PyTorch Models (Python)
-│   ├── env/                # Vayu-Gym (OpenEnv compliance)
-│   └── scripts/            # Unsloth/HF TRL Training
-├── ui/                     # Ratatui Dashboard (Rust)
-└── adversary/              # Chaos Monkey Stressors (Python)
-```
-
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-Install the native toolchain needed by the current `kernel/` and `bridge/` code:
-
+### 1. Prerequisites
+You need a Linux machine (Arch/Ubuntu) with BTF enabled.
 ```bash
-# Arch Linux
-sudo pacman -S base-devel clang llvm libelf libbpf bpftool rust cargo
+# Ubuntu
+sudo apt install clang llvm libelf-dev libbpf-dev linux-tools-$(uname -r) cargo
+# Arch
+sudo pacman -S clang llvm libelf libbpf bpftool cargo
 ```
 
-You need:
-- A kernel with BTF enabled at `/sys/kernel/btf/vmlinux`
-- Root access for loading and attaching eBPF programs
-
-### Run Everything
-From the repo root:
-
-1. Generate `vmlinux.h` once for the running kernel.
+### 2. Build the Kernel Sensor (eBPF)
+The Sentinel extracts a **24-Dimensional State Vector** directly from the scheduler.
 ```bash
 cd kernel
+# Generate kernel headers
 make vmlinux
+# Compile and load into kernel
+make load
 ```
+*Verification:* Run `make trace` to see the raw heartbeat of the kernel.
 
-2. Build and attach the eBPF scheduler probes.
-```bash
-make
-```
-
-`make` currently does:
-- Compile `sentinel.bpf.c` into `sentinel.bpf.o`
-- Load all tracepoint programs with `bpftool prog loadall`
-- Auto-attach the scheduler hooks
-
-It does not start trace output.
-
-3. In a second terminal, start the Rust Aya bridge.
+### 3. Run the Rust Bridge (Telemetry)
+The Bridge converts raw kernel bytes into structured telemetry for the AI.
 ```bash
 cd bridge
-cargo run
+cargo build
+sudo ./target/debug/kernelx-bridge
 ```
+*Expected Output:* You should see a live stream of **24D Vectors** showing PIDs, Wait Latency (us), and VRuntime.
 
-This bridge:
-- Loads the same `kernel/sentinel.bpf.o`
-- Attaches `sched_wakeup`, `sched_wakeup_new`, and `sched_switch`
-- Reads binary `latency_event` records from the ring buffer
-- Prints decoded latency telemetry to stdout
-
-4. Generate workload so the scheduler has something to observe.
-```bash
-yes > /dev/null
-```
-
-Stop it later with `Ctrl+C`.
-
-### Optional: Trace Pipe Debugging
-If you want kernel trace output for debugging:
-
-```bash
-cd kernel
-make trace
-```
-
-This is optional. The main data path now is the ring buffer consumed by the Rust bridge, not `bpf_printk`.
-
-### Build Only
-To only compile the current components:
-
-```bash
-cd kernel
-make sentinel.bpf.o
-
-cd ../bridge
-cargo check
-```
-
-### Shutdown / Cleanup
-When you are done:
-
+### 4. Cleanup
+To safely detach the sensors from your kernel:
 ```bash
 cd kernel
 make unload
-make clean
 ```
 
-This removes the pinned BPF programs from `/sys/fs/bpf/kernelx_sentinel` and clears generated kernel artifacts.
+---
+
+## 📂 Project Structure
+- `/kernel`: eBPF C code (The "Eyes").
+- `/bridge`: Rust Aya application (The "Nervous System").
+- `/brain`: Python Gymnasium & PyTorch (The "Intelligence").
+- `/ui`: Ratatui TUI dashboard (The "Observability").
+- `implementation.md`: Technical deep-dive and math.
+- `plan.md`: Current team roadmap and task guide.
 
 ---
 
-## 🎯 Winning Objectives
-* **Environment Innovation:** Moving AI training from digital sims to real-world system optimization.
-* **Long-Horizon Planning:** Enabling agents to track hardware state over 300+ step trajectories.
-* **Measurable Impact:** Targeting a $>15\%$ reduction in P99 latency under adversarial stress.
+## 📐 The 24D State Vector
+Our agents observe the following micro-metrics per task switch:
+- `[0-3]`: CPU Affinity & Priority levels.
+- `[4-7]`: Scheduling stats (VRuntime, Exec Runtime).
+- `[8-11]`: Run-queue lengths & System Load.
+- `[12-15]`: Context Switch frequencies.
+- `[23]`: **Ready Queue Latency (μs)** - Our primary reward metric.
 
 ---
-**Created for the Meta PyTorch OpenEnv Hackathon @ Scaler School of Technology.**
+**Developed for the Meta PyTorch OpenEnv Hackathon.**

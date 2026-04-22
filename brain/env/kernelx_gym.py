@@ -1,5 +1,5 @@
 """
-KernelX VayuGym: The "Intelligence" Layer
+KernelX KernelXGym: The "Intelligence" Layer
 
 This module wraps the Linux Kernel into a standard OpenAI/Gymnasium environment.
 It allows RL agents to observe system state and take actions (priority weights)
@@ -11,7 +11,7 @@ from gymnasium import spaces
 import numpy as np
 import time
 
-class VayuGymEnv(gym.Env):
+class KernelXGymEnv(gym.Env):
     """
     Custom Environment for Linux Kernel Optimization.
     
@@ -21,7 +21,7 @@ class VayuGymEnv(gym.Env):
     metadata = {"render_modes": ["human"]}
 
     def __init__(self, render_mode=None):
-        super(VayuGymEnv, self).__init__()
+        super(KernelXGymEnv, self).__init__()
 
         # Define Action Space: Continuous weights for N process groups
         # For prototype, let's assume 4 main process groups
@@ -33,7 +33,7 @@ class VayuGymEnv(gym.Env):
         self.render_mode = render_mode
         
         # TODO: Initialize IPC connection to Rust bridge (ZMQ/Unix Socket)
-        print("[VayuGym] Initialized Environment. Waiting for Bridge connection...")
+        print("[KernelXGym] Initialized Environment. Waiting for Bridge connection...")
 
     def reset(self, seed=None, options=None):
         """
@@ -81,7 +81,7 @@ class VayuGymEnv(gym.Env):
         """
         Cleanup communication channels.
         """
-        print("[VayuGym] Closing session.")
+        print("[KernelXGym] Closing session.")
 
     def _get_obs(self):
         """

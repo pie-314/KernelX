@@ -1,9 +1,5 @@
 /**
- * KernelX Bridge: The "Nervous System"
- * 
- * This Rust application acts as the high-speed bridge between the Linux Kernel (eBPF)
- * and the Reinforcement Learning Intelligence (Python). It polls the kernel ring
- * buffer and exposes telemetry data.
+ * KernelX Bridge: Updated for 24D Telemetry
  */
 
 use std::{
@@ -26,88 +22,82 @@ use bytemuck::{Pod, Zeroable};
 
 const DEFAULT_BPF_OBJECT: &str = "../kernel/sentinel.bpf.o";
 
-/// Memory-mapped structure matching the kernel's `latency_event`.
-/// We use `Pod` and `Zeroable` for safe zero-copy casting from raw bytes.
+/// Mirror of the 24D packet from kernel/sentinel_event.h
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct LatencyEvent {
-    scheduled_ns: u64,
-    ready_ns: u64,
-    latency_us: u64,
+struct KernelXEvent {
+    features: [u64; 24],
+    timestamp: u64,
     pid: u32,
     cpu: u32,
 }
 
 fn main() -> Result<()> {
-    // 1. Setup graceful shutdown handler (SIGINT/Ctrl+C)
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
     ctrlc::set_handler(move || {
         r.store(false, Ordering::SeqCst);
-        println!("\n[Bridge] Shutdown signal received. Cleaning up...");
+        println!("\n[Bridge] Shutdown signal received.");
     }).expect("Error setting Ctrl-C handler");
 
-    // 2. Resolve BPF object path
     let object_path = std::env::args()
         .nth(1)
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_BPF_OBJECT));
 
-    // 3. Load the BPF bytecode into the kernel
-    println!("[Bridge] Loading eBPF object: {}", object_path.display());
     let object = fs::read(&object_path)
         .with_context(|| format!("Failed to read BPF object at {}", object_path.display()))?;
     
     let mut bpf = Ebpf::load(&object).context("Failed to parse BPF object")?;
 
-    // 4. Initialize kernel logging (bpf_printk support)
     if let Err(err) = EbpfLogger::init(&mut bpf) {
         eprintln!("[Warn] aya-log unavailable: {err}");
     }
 
-    // 5. Attach probes to the Linux Scheduler tracepoints
     attach_tracepoint(&mut bpf, "handle_sched_wakeup", "sched", "sched_wakeup")?;
-    attach_tracepoint(&mut bpf, "handle_sched_wakeup_new", "sched", "sched_wakeup_new")?;
-    attach_tracepoint(&mut bpf, "handle_sched_switch", "sched", "sched_switch")?;
+    
+    // Attach sched_switch as a RawTracePoint
+    let switch_prog: &mut aya::programs::RawTracePoint = bpf
+        .program_mut("handle_sched_switch")
+        .context("Missing handle_sched_switch")?
+        .try_into()
+        .context("Not a raw tracepoint")?;
+    switch_prog.load()?;
+    switch_prog.attach("sched_switch")?;
 
-    // 6. Bind to the kernel-to-user ring buffer
     let mut events_ring = RingBuf::try_from(
         bpf.take_map("events")
             .context("BPF ring buffer map 'events' not found")?,
     )
     .context("Failed to initialize ring buffer")?;
 
-    println!("[Bridge] System online. Monitoring micro-latency...");
+    println!("[Bridge] System online. Extracting 24D Vectors...");
 
-    // 7. Main Telemetry Loop
     while running.load(Ordering::SeqCst) {
-        // Poll for new events from the kernel
         while let Some(item) = events_ring.next() {
-            match parse_event(&item) {
+            match bytemuck::try_from_bytes::<KernelXEvent>(&item) {
                 Ok(event) => {
-                    // TODO: In Phase 2, this will send data to RadishDB and Python IPC
+                    // Log a summary of the 24D vector
                     println!(
-                        "EVENT | pid: {:<6} | cpu: {:<2} | wait: {:>5} us",
-                        event.pid, event.cpu, event.latency_us
+                        "24D | PID: {:<6} | Wait: {:>5}us | VRuntime: {:>10}",
+                        event.pid, 
+                        event.features[23], // Our latency metric
+                        event.features[5]   // VRuntime index
                     );
                 }
-                Err(e) => eprintln!("[Error] Corrupt event: {e}"),
+                Err(e) => eprintln!("[Error] Data layout mismatch: {e}"),
             }
         }
-
-        // Slight sleep to prevent 100% CPU usage on the bridge itself
         thread::sleep(Duration::from_millis(10));
     }
 
-    println!("[Bridge] Successfully detached. Goodbye.");
     Ok(())
 }
 
-/// Helper to attach a BPF program to a kernel tracepoint.
 fn attach_tracepoint(bpf: &mut Ebpf, name: &str, category: &str, tracepoint: &str) -> Result<()> {
     let program: &mut TracePoint = bpf
         .program_mut(name)
-        .with_context(|| format!("Program '{name}' not found in BPF object"))?
+        .with_context(|| format!("Program '{name}' not found"))?
         .try_into()
         .context("Program is not a tracepoint")?;
 
@@ -116,11 +106,4 @@ fn attach_tracepoint(bpf: &mut Ebpf, name: &str, category: &str, tracepoint: &st
         .context(format!("Failed to attach {name} to {category}:{tracepoint}"))?;
 
     Ok(())
-}
-
-/// Safely casts a byte slice into our structured LatencyEvent.
-fn parse_event(bytes: &[u8]) -> Result<LatencyEvent> {
-    bytemuck::try_from_bytes::<LatencyEvent>(bytes)
-        .copied()
-        .map_err(|_| anyhow::anyhow!("Data layout mismatch in ring buffer packet"))
 }
