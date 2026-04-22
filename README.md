@@ -61,25 +61,89 @@ kernelx/
 
 ## 🚀 Getting Started
 
-### Prerequisites (Arch Linux)
+### Prerequisites
+Install the native toolchain needed by the current `kernel/` and `bridge/` code:
+
 ```bash
-# System Toolchain
-sudo pacman -S base-devel clang llvm libelf libbpf linux-tools
-# Rust BPF Setup
-rustup toolchain install nightly
-rustup component add rust-src --toolchain nightly
-cargo install bpf-linker
+# Arch Linux
+sudo pacman -S base-devel clang llvm libelf libbpf bpftool rust cargo
 ```
 
-### Installation
-1.  **Clone the Repo:** `git clone https://github.com/pie-314/kernelx`
-2.  **Generate Headers:** ```bash
-    bpftool btf dump file /sys/kernel/btf/vmlinux format c > kernel/include/vmlinux.h
-    ```
-3.  **Build the Nervous System:**
-    ```bash
-    cd bridge && cargo build --release
-    ```
+You need:
+- A kernel with BTF enabled at `/sys/kernel/btf/vmlinux`
+- Root access for loading and attaching eBPF programs
+
+### Run Everything
+From the repo root:
+
+1. Generate `vmlinux.h` once for the running kernel.
+```bash
+cd kernel
+make vmlinux
+```
+
+2. Build and attach the eBPF scheduler probes.
+```bash
+make
+```
+
+`make` currently does:
+- Compile `sentinel.bpf.c` into `sentinel.bpf.o`
+- Load all tracepoint programs with `bpftool prog loadall`
+- Auto-attach the scheduler hooks
+
+It does not start trace output.
+
+3. In a second terminal, start the Rust Aya bridge.
+```bash
+cd bridge
+cargo run
+```
+
+This bridge:
+- Loads the same `kernel/sentinel.bpf.o`
+- Attaches `sched_wakeup`, `sched_wakeup_new`, and `sched_switch`
+- Reads binary `latency_event` records from the ring buffer
+- Prints decoded latency telemetry to stdout
+
+4. Generate workload so the scheduler has something to observe.
+```bash
+yes > /dev/null
+```
+
+Stop it later with `Ctrl+C`.
+
+### Optional: Trace Pipe Debugging
+If you want kernel trace output for debugging:
+
+```bash
+cd kernel
+make trace
+```
+
+This is optional. The main data path now is the ring buffer consumed by the Rust bridge, not `bpf_printk`.
+
+### Build Only
+To only compile the current components:
+
+```bash
+cd kernel
+make sentinel.bpf.o
+
+cd ../bridge
+cargo check
+```
+
+### Shutdown / Cleanup
+When you are done:
+
+```bash
+cd kernel
+make unload
+make clean
+```
+
+This removes the pinned BPF programs from `/sys/fs/bpf/kernelx_sentinel` and clears generated kernel artifacts.
 
 ---
 
