@@ -62,6 +62,9 @@ result = client.step(weights=[0.1, -0.2, 0.5, 0.0])
 ## 📂 Project Structure
 - `/kernel`: eBPF C code (The "Eyes").
 - `/bridge`: Rust Aya application (The "Nervous System").
+- `/RadishDB`: **Crash-Safe WAL** (The "Memory").
+  - Persistent storage for every kernel trajectory.
+  - Supports binary-safe snapshots and JSONL export for AI training.
 - `/brain`: **OpenEnv Implementation** (The "Intelligence").
   - `openenv.yaml`: Environment manifest.
   - `models.py`: Pydantic definitions for Action/Observation.

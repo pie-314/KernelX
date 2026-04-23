@@ -1,5 +1,5 @@
 /**
- * KernelX Bridge: Updated for 24D Telemetry and SHM Export
+ * KernelX Bridge: Updated for 24D Telemetry, SHM Export, and RadishDB Persistence
  */
 use std::{
     fs,
@@ -15,10 +15,12 @@ use aya::{maps::RingBuf, programs::TracePoint, Ebpf};
 use aya_log::EbpfLogger;
 use bytemuck::{Pod, Zeroable};
 use kernelx_bridge::trajectories::{KernelXEvent, TrajectoryManager};
+use kernelx_bridge::persistence;
 use memmap2::MmapMut;
 
 const DEFAULT_BPF_OBJECT: &str = "../kernel/sentinel.bpf.o";
 const SHM_PATH: &str = "/dev/shm/kernelx_state";
+const RADISH_AOF_PATH: &str = "radish.aof";
 
 /// The Global State exported for the HUD and AI.
 /// Matches the specification in UI.md.
@@ -42,7 +44,10 @@ fn main() -> Result<()> {
     })
     .expect("Error setting Ctrl-C handler");
 
-    // 1. Initialize Shared Memory for the HUD
+    // 1. Initialize RadishDB Experience Store (WAL)
+    persistence::init(RADISH_AOF_PATH).map_err(|e| anyhow::anyhow!(e))?;
+
+    // 2. Initialize Shared Memory for the HUD
     let shm_file = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -54,7 +59,7 @@ fn main() -> Result<()> {
     let mut mmap = unsafe { MmapMut::map_mut(&shm_file)? };
     let mut global_state = HUDState::zeroed();
 
-    // 2. Parse Arguments
+    // 3. Parse Arguments
     let args: Vec<String> = std::env::args().collect();
     let should_record = args.iter().any(|arg| arg == "--record");
     
@@ -64,7 +69,7 @@ fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_BPF_OBJECT));
 
-    // 3. Conditionally Initialize the Trajectory Manager
+    // 4. Conditionally Initialize the Trajectory Manager
     let mut manager = if should_record {
         println!("[Bridge] Recording enabled. Saving to trajectories.jsonl");
         Some(TrajectoryManager::new("trajectories.jsonl")?)
@@ -104,7 +109,10 @@ fn main() -> Result<()> {
         while let Some(item) = events_ring.next() {
             match bytemuck::try_from_bytes::<KernelXEvent>(&item) {
                 Ok(event) => {
-                    // 4. Update the Global SHM State
+                    // 5. Persist to RadishDB (Metal Experience Store)
+                    persistence::persist_event(event);
+
+                    // 6. Update the Global SHM State
                     global_state.features = event.features;
                     global_state.active_pid = event.pid;
                     global_state.p99_wait_us = event.features[23];
@@ -112,12 +120,12 @@ fn main() -> Result<()> {
                     // Copy to memory map (zero-copy update for the HUD)
                     mmap.copy_from_slice(bytemuck::bytes_of(&global_state));
 
-                    // 5. Conditionally record to JSONL
+                    // 7. Conditionally record to JSONL
                     if let Some(ref mut m) = manager {
                         m.record_transition(*event)?;
                     }
 
-                    // 6. Log high-latency events to console
+                    // 8. Log high-latency events to console
                     if event.features[23] > 1000 {
                         println!(
                             "24D | PID: {:<6} | Wait: {:>5}us | VRuntime: {:>10}",
@@ -137,6 +145,10 @@ fn main() -> Result<()> {
         m.flush()?;
         println!("[Bridge] Trajectories saved to disk.");
     }
+
+    // Final Radish Export for the AI Lead
+    println!("[Bridge] Exporting experience store to trajectories.json...");
+    let _ = persistence::export_to_json("trajectories.json");
 
     Ok(())
 }
