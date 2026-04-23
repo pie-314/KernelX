@@ -1,15 +1,31 @@
 import uuid
 import time
+import os
 import numpy as np
+import mmap
 from typing import Tuple
 from openenv_core import Environment, StepResult
 from ..models import Observation, Action, State
+
+SHM_PATH = "/dev/shm/kernelx_state"
+# Size of HUDState: 24*8 (features) + 4 (action) + 4 (pid) + 4 (clamped) + 128 (reasoning) + 8 (wait) = 340 bytes
+# Actually, the struct is packed, so we should be careful. 
+# features(192) + action(4) + pid(4) + clamped(4) + reasoning(128) + wait(8) = 340
+SHM_SIZE = 340
 
 class KernelXEnvironment(Environment[Observation, Action, State]):
     def __init__(self):
         self.episode_id = str(uuid.uuid4())
         self.step_count = 0
-        # TODO: Initialize ZMQ/Socket connection to Rust Bridge
+        self.shm = None
+        
+        if os.path.exists(SHM_PATH):
+            fd = os.open(SHM_PATH, os.O_RDONLY)
+            self.shm = mmap.mmap(fd, SHM_SIZE, mmap.MAP_SHARED, mmap.PROT_READ)
+            print(f"[KernelX] Connected to live Telemetry SHM.")
+        else:
+            print(f"[Warn] SHM file not found. AI will use fallback data.")
+
         print(f"[KernelX] OpenEnv Server Initialized. Session: {self.episode_id}")
 
     def reset(self) -> Observation:
@@ -18,34 +34,48 @@ class KernelXEnvironment(Environment[Observation, Action, State]):
         return self._get_observation()
 
     def step(self, action: Action) -> StepResult[Observation]:
-        # 1. Apply Action to Rust Bridge
+        # 1. Apply Action (Placeholder for now)
         self._apply_action(action)
         
-        # 2. Collect next observation
-        time.sleep(0.01) # Control loop frequency
+        # 2. Collect next observation from SHM
+        time.sleep(0.01) 
         obs = self._get_observation()
         self.step_count += 1
         
-        # 3. Calculate Reward
-        reward = self._calculate_reward(obs)
-        
         return StepResult(
             observation=obs,
-            reward=reward,
+            reward=self._calculate_reward(obs),
             done=False,
             info={"step": self.step_count}
         )
 
-    def state(self) -> State:
-        return State(
-            episode_id=self.episode_id,
-            step_count=self.step_count,
-            latency_p99=0.5, # Placeholder
-            cpu_usage=15.0   # Placeholder
-        )
-
     def _get_observation(self) -> Observation:
-        # Placeholder: In production, fetch from Rust Bridge ZMQ
+        if self.shm:
+            self.shm.seek(0)
+            data = self.shm.read(SHM_SIZE)
+            
+            # Unpack the 24D features (first 192 bytes)
+            features = np.frombuffer(data[:192], dtype=np.uint64).astype(float).tolist()
+            
+            # Unpack PID (at offset 200) and Wait (at offset 332)
+            # (Calculation based on #[repr(C, packed)] in main.rs)
+            # features: 0..192
+            # action: 192..196
+            # pid: 196..200
+            # clamped: 200..204
+            # reasoning: 204..332
+            # wait: 332..340
+            pid = int.from_buffer(data[196:200], "little")
+            wait = int.from_buffer(data[332:340], "little")
+            
+            return Observation(
+                features=features,
+                timestamp=int(time.time_ns()),
+                pid=pid,
+                cpu=0 # SMP ID is in features[0]
+            )
+        
+        # Fallback to random if SHM is missing
         return Observation(
             features=list(np.random.rand(24).astype(float)),
             timestamp=int(time.time_ns()),
