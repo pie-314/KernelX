@@ -1,5 +1,36 @@
+# Local Backups
+_local_backup/
+
+# Rust
 target/
+**/*.rs.bk
+Cargo.lock
+
+# eBPF / C
 *.o
+vmlinux.h
+
+# Data & Logs
+*.jsonl
+*.log
+trajectories.jsonl
+
+# Python
 __pycache__/
-*.pth
-*.bin
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+.env
+
+# Node / Tools (PDF Generation)
+node_modules/
+package-lock.json
+package.json
+KernelX_Master_Guide.pdf
+
+# OS Specific
+.DS_Store
+.idea/
+.vscode/
