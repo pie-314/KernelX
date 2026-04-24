@@ -1,6 +1,5 @@
 use std::ffi::{c_void, CString};
 use std::os::raw::c_char;
-use std::ptr;
 use std::sync::Mutex;
 use lazy_static::lazy_static;
 
@@ -14,6 +13,11 @@ extern "C" {
     fn aof_open(filename: *const c_char) -> i32;
     fn aof_append_set(key: *const c_void, klen: usize, value: *const c_void, vlen: usize, expires_at: i64);
     fn radish_export_json(ht: *mut c_void, filename: *const c_char) -> i32;
+    fn aof_get_size() -> usize;
+}
+
+pub fn get_aof_size() -> u64 {
+    unsafe { aof_get_size() as u64 }
 }
 
 pub enum RadishMode {

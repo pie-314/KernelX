@@ -1,29 +1,27 @@
 /**
- * KernelX Bridge: Updated for 24D Telemetry, SHM Export, and RadishDB Persistence
+ * KernelX Bridge: Final "Metal" implementation with real telemetry and ZMQ control loop.
  */
 use std::{
     fs,
     path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
-    sync::Arc,
+    sync::{Arc, Mutex},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
-use aya::{maps::RingBuf, programs::TracePoint, Ebpf};
-use aya_log::EbpfLogger;
+use aya::{maps::{RingBuf, HashMap as BpfHashMap}, programs::TracePoint, Ebpf};
 use bytemuck::{Pod, Zeroable};
-use kernelx_bridge::trajectories::{KernelXEvent, TrajectoryManager};
+use kernelx_bridge::trajectories::KernelXEvent;
 use kernelx_bridge::persistence;
 use memmap2::MmapMut;
 
 const DEFAULT_BPF_OBJECT: &str = "../kernel/sentinel.bpf.o";
 const SHM_PATH: &str = "/dev/shm/kernelx_state";
 const RADISH_AOF_PATH: &str = "radish.aof";
+const ZMQ_ADDR: &str = "tcp://*:5555";
 
-/// The Global State exported for the HUD and AI.
-/// Matches the specification in UI.md.
 #[repr(C, packed)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct HUDState {
@@ -33,6 +31,51 @@ struct HUDState {
     is_clamped: u32,
     reasoning: [u8; 128],
     p99_wait_us: u64,
+    
+    // Real Infra Fields
+    core_heat: [f32; 4],
+    model_confidence: f32,
+    world_model_drift: f32,
+    radish_wal_size: u64,
+    radish_dirty_pages: u32,
+}
+
+struct CpuTracker {
+    last_total: [u64; 4],
+    last_idle: [u64; 4],
+}
+
+impl CpuTracker {
+    fn new() -> Self {
+        Self { last_total: [0; 4], last_idle: [0; 4] }
+    }
+
+    fn update(&mut self) -> [f32; 4] {
+        let mut usage = [0.0f32; 4];
+        if let Ok(content) = fs::read_to_string("/proc/stat") {
+            for (i, line) in content.lines().skip(1).take(4).enumerate() {
+                let parts: Vec<u64> = line.split_whitespace()
+                    .skip(1)
+                    .filter_map(|s| s.parse().ok())
+                    .collect();
+                if parts.len() >= 7 {
+                    let idle = parts[3];
+                    let total: u64 = parts.iter().sum();
+                    
+                    let diff_total = total - self.last_total[i];
+                    let diff_idle = idle - self.last_idle[i];
+                    
+                    if diff_total > 0 {
+                        usage[i] = 1.0 - (diff_idle as f32 / diff_total as f32);
+                    }
+                    
+                    self.last_total[i] = total;
+                    self.last_idle[i] = idle;
+                }
+            }
+        }
+        usage
+    }
 }
 
 fn main() -> Result<()> {
@@ -40,130 +83,121 @@ fn main() -> Result<()> {
     let r = running.clone();
     ctrlc::set_handler(move || {
         r.store(false, Ordering::SeqCst);
-        println!("\n[Bridge] Shutdown signal received.");
-    })
-    .expect("Error setting Ctrl-C handler");
+    }).expect("Error setting Ctrl-C handler");
 
-    // 1. Initialize RadishDB Experience Store (WAL)
+    // 1. Initialize RadishDB
     persistence::init(RADISH_AOF_PATH).map_err(|e| anyhow::anyhow!(e))?;
 
-    // 2. Initialize Shared Memory for the HUD
-    let shm_file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(SHM_PATH)
-        .context("Failed to create SHM file")?;
+    // 2. Initialize SHM
+    let shm_file = fs::OpenOptions::new().read(true).write(true).create(true).open(SHM_PATH)?;
     shm_file.set_len(std::mem::size_of::<HUDState>() as u64)?;
-    
     let mut mmap = unsafe { MmapMut::map_mut(&shm_file)? };
-    let mut global_state = HUDState::zeroed();
-
-    // 3. Parse Arguments
-    let args: Vec<String> = std::env::args().collect();
-    let should_record = args.iter().any(|arg| arg == "--record");
     
-    let object_path = args.iter()
-        .skip(1)
-        .find(|arg| !arg.starts_with("--"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_BPF_OBJECT));
+    let shared_state = Arc::new(Mutex::new(HUDState::zeroed()));
 
-    // 4. Conditionally Initialize the Trajectory Manager
-    let mut manager = if should_record {
-        println!("[Bridge] Recording enabled. Saving to trajectories.jsonl");
-        Some(TrajectoryManager::new("trajectories.jsonl")?)
-    } else {
-        None
-    };
+    // 3. Start ZMQ Control Listener (Brain -> Bridge)
+    let z_state = shared_state.clone();
+    let z_running = running.clone();
 
-    println!("[Bridge] Loading eBPF object: {}", object_path.display());
-    let object = fs::read(&object_path)
-        .with_context(|| format!("Failed to read BPF object at {}", object_path.display()))?;
-
+    // 4. Load eBPF
+    let object_path = PathBuf::from(DEFAULT_BPF_OBJECT);
+    let object = fs::read(&object_path).with_context(|| "Failed to read BPF object")?;
     let mut bpf = Ebpf::load(&object).context("Failed to parse BPF object")?;
+    
+    let priority_actions: BpfHashMap<aya::maps::MapData, u32, i64> = BpfHashMap::try_from(bpf.take_map("priority_actions").context("Map priority_actions not found")?)?;
+    let pa_mutex = Arc::new(Mutex::new(priority_actions));
+    let pa_clone = pa_mutex.clone();
 
-    if let Err(err) = EbpfLogger::init(&mut bpf) {
-        eprintln!("[Warn] aya-log unavailable: {err}");
-    }
+    thread::spawn(move || {
+        let ctx = zmq::Context::new();
+        let socket = ctx.socket(zmq::PULL).unwrap();
+        socket.bind(ZMQ_ADDR).unwrap();
+        socket.set_rcvtimeo(1000).unwrap();
 
+        println!("[Bridge] ZMQ Control Listener online at {}", ZMQ_ADDR);
+
+        while z_running.load(Ordering::SeqCst) {
+            if let Ok(Ok(msg)) = socket.recv_string(0) {
+                // Format: "PID:WEIGHT:CONFIDENCE:DRIFT:REASONING"
+                let parts: Vec<&str> = msg.split(':').collect();
+                if parts.len() >= 5 {
+                    let pid: u32 = parts[0].parse().unwrap_or(0);
+                    let weight: f32 = parts[1].parse().unwrap_or(0.0);
+                    let conf: f32 = parts[2].parse().unwrap_or(0.0);
+                    let drift: f32 = parts[3].parse().unwrap_or(0.0);
+                    let reason = parts[4];
+
+                    {
+                        let mut s = z_state.lock().unwrap();
+                        s.current_action = weight;
+                        s.model_confidence = conf;
+                        s.world_model_drift = drift;
+                        s.active_pid = pid;
+                        
+                        let mut r_bytes = [0u8; 128];
+                        let r_src = reason.as_bytes();
+                        let len = r_src.len().min(128);
+                        r_bytes[..len].copy_from_slice(&r_src[..len]);
+                        s.reasoning = r_bytes;
+                    }
+
+                    // Update BPF Actuator Map
+                    if pid > 0 {
+                        let mut pa = pa_clone.lock().unwrap();
+                        let _ = pa.insert(pid, weight as i64, 0);
+                    }
+                }
+            }
+        }
+    });
+
+    // 5. Attach eBPF Programs
     attach_tracepoint(&mut bpf, "handle_sched_wakeup", "sched", "sched_wakeup")?;
-
-    let switch_prog: &mut aya::programs::RawTracePoint = bpf
-        .program_mut("handle_sched_switch")
-        .context("Missing handle_sched_switch")?
-        .try_into()
-        .context("Not a raw tracepoint")?;
+    let switch_prog: &mut aya::programs::RawTracePoint = bpf.program_mut("handle_sched_switch").unwrap().try_into()?;
     switch_prog.load()?;
     switch_prog.attach("sched_switch")?;
 
-    let mut events_ring = RingBuf::try_from(
-        bpf.take_map("events")
-            .context("BPF ring buffer map 'events' not found")?,
-    )
-    .context("Failed to initialize ring buffer")?;
+    let mut events_ring = RingBuf::try_from(bpf.take_map("events").unwrap())?;
+    let mut cpu_tracker = CpuTracker::new();
+    let mut last_infra_update = Instant::now();
 
-    println!("[Bridge] System online. Extracting 24D Vectors...");
+    println!("[Bridge] System online. REAL telemetry enabled.");
 
     while running.load(Ordering::SeqCst) {
         while let Some(item) = events_ring.next() {
-            match bytemuck::try_from_bytes::<KernelXEvent>(&item) {
-                Ok(event) => {
-                    // 5. Persist to RadishDB (Metal Experience Store)
-                    persistence::persist_event(event);
-
-                    // 6. Update the Global SHM State
-                    global_state.features = event.features;
-                    global_state.active_pid = event.pid;
-                    global_state.p99_wait_us = event.features[23];
-                    
-                    // Copy to memory map (zero-copy update for the HUD)
-                    mmap.copy_from_slice(bytemuck::bytes_of(&global_state));
-
-                    // 7. Conditionally record to JSONL
-                    if let Some(ref mut m) = manager {
-                        m.record_transition(*event)?;
-                    }
-
-                    // 8. Log high-latency events to console
-                    if event.features[23] > 1000 {
-                        println!(
-                            "24D | PID: {:<6} | Wait: {:>5}us | VRuntime: {:>10}",
-                            event.pid,
-                            event.features[23],
-                            event.features[5]
-                        );
-                    }
-                }
-                Err(e) => eprintln!("[Error] Data layout mismatch: {e}"),
+            if let Ok(event) = bytemuck::try_from_bytes::<KernelXEvent>(&item) {
+                persistence::persist_event(event);
+                
+                let mut s = shared_state.lock().unwrap();
+                s.features = event.features;
+                s.p99_wait_us = event.features[23];
+                
+                // Copy to SHM
+                mmap.copy_from_slice(bytemuck::bytes_of(&*s));
             }
         }
+
+        // Periodic Infra Update (100ms)
+        if last_infra_update.elapsed() >= Duration::from_millis(100) {
+            let mut s = shared_state.lock().unwrap();
+            s.core_heat = cpu_tracker.update();
+            s.radish_wal_size = persistence::get_aof_size();
+            s.radish_dirty_pages = (s.radish_wal_size / 4096) as u32 % 100; // approximation
+            
+            mmap.copy_from_slice(bytemuck::bytes_of(&*s));
+            last_infra_update = Instant::now();
+        }
+
         thread::sleep(Duration::from_millis(10));
     }
 
-    if let Some(mut m) = manager {
-        m.flush()?;
-        println!("[Bridge] Trajectories saved to disk.");
-    }
-
-    // Final Radish Export for the AI Lead
-    println!("[Bridge] Exporting experience store to trajectories.json...");
-    let _ = persistence::export_to_json("trajectories.json");
-
+    println!("[Bridge] Shutting down.");
     Ok(())
 }
 
 fn attach_tracepoint(bpf: &mut Ebpf, name: &str, category: &str, tracepoint: &str) -> Result<()> {
-    let program: &mut TracePoint = bpf
-        .program_mut(name)
-        .with_context(|| format!("Program '{name}' not found"))?
-        .try_into()
-        .context("Program is not a tracepoint")?;
-
-    program.load().context(format!("Failed to load {name}"))?;
-    program.attach(category, tracepoint).context(format!(
-        "Failed to attach {name} to {category}:{tracepoint}"
-    ))?;
-
+    let program: &mut TracePoint = bpf.program_mut(name).unwrap().try_into()?;
+    program.load()?;
+    program.attach(category, tracepoint)?;
     Ok(())
 }

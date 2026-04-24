@@ -1,5 +1,6 @@
 # Local Backups
 _local_backup/
+docs/
 *.md
 
 # Rust

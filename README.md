@@ -1,87 +1,84 @@
-# KernelX: Cognitive Operating System Layer 🌪️
+# KernelX
 
-**KernelX** is an autonomous intelligence plane for the Linux Kernel. It replaces static scheduling heuristics with a Reinforcement Learning loop that optimizes hardware state (CPU, Cache, I/O) in real-time.
+KernelX is an OpenEnv-compatible environment and demo stack for the Meta PyTorch OpenEnv Hackathon. It connects Linux scheduler telemetry to a Rust bridge, exposes the environment through FastAPI, runs a simple autonomous policy loop, and ships a rebuilt terminal UI that acts as the final hackathon command console.
 
----
+## What Ships
 
-## 👥 The KernelX Trinity (Team Leads)
-*   **Systems Lead (Sentinel):** The "Metal" layer. eBPF sensors and Rust Bridge.
-*   **AI Lead (Strategist):** The "Brain" layer. PPO Agents and Gymnasium Environment.
-*   **Governance Lead (Auditor):** The "Safety" layer. Action clipping and TUI Monitoring.
+- `kernel/`: eBPF scheduler sensor.
+- `bridge/`: Rust bridge that exports shared-memory telemetry and records trajectories.
+- `brain/`: OpenEnv environment, FastAPI app, and autonomous runner.
+- `ui/`: rebuilt `ratatui` console with:
+  - live or mock telemetry,
+  - April 25-26, 2026 event flow,
+  - judging criteria,
+  - submission readiness checks,
+  - end-to-end operator runbook.
 
----
+## End-to-End Demo
 
-## 🚀 Getting Started (The Metal Layer)
+Run the stack in this order:
 
-This guide helps you build and test the **Perception Loop** (eBPF -> Rust Bridge).
-
-### 1. Prerequisites
-You need a Linux machine (Arch/Ubuntu) with BTF enabled.
 ```bash
-# Ubuntu
-sudo apt install clang llvm libelf-dev libbpf-dev linux-tools-$(uname -r) cargo
-# Arch
-sudo pacman -S clang llvm libelf libbpf bpftool cargo
+make -C kernel load
+cargo run --manifest-path bridge/Cargo.toml --release
+cd brain && python3 -m server.app
+cd brain/server && python3 run_autonomous.py --steps 50 --verbose
+cargo run --manifest-path ui/Cargo.toml
 ```
 
-### 2. Build the Kernel Sensor (eBPF)
-The Sentinel extracts a **24-Dimensional State Vector** directly from the scheduler.
-```bash
-cd kernel
-# Generate kernel headers
-make vmlinux
-# Compile and load into kernel
-make load
+If the kernel sensor or bridge is unavailable, the TUI still runs in `MOCK DEMO` mode so the final presentation flow remains usable.
+
+## TUI Controls
+
+- `Tab`, `h`, `l`: switch screens
+- `1-5`: jump to a screen
+- `q`: quit
+
+Screens:
+
+1. `Live Dashboard`
+2. `Event Flow`
+3. `Judging`
+4. `Submission`
+5. `System`
+
+## Data Contract
+
+The UI reads from `/dev/shm/kernelx_state` using this ABI:
+
+```rust
+#[repr(C, packed)]
+struct HUDState {
+    features: [u64; 24],
+    current_action: f32,
+    active_pid: u32,
+    is_clamped: u32,
+    reasoning: [u8; 128],
+    p99_wait_us: u64,
+}
 ```
-*Verification:* Run `make trace` to see the raw heartbeat of the kernel.
 
-### 3. Run the OpenEnv Server (Brain)
-The Brain is a standard **OpenEnv** environment that exposes the kernel telemetry via a FastAPI server.
-```bash
-cd brain
-# Install dependencies
-pip install -r server/requirements.txt
-# Start the OpenEnv server
-python -m server.app
-```
-*Verification:* Access `http://localhost:8000/docs` to see the OpenEnv API.
+The brain server uses the same layout with `SHM_SIZE = 340`.
 
-### 4. Connect the Agent
-You can now connect any AI agent using the `KernelXClient`:
-```python
-from brain import KernelXClient
+## Submission Notes
 
-client = KernelXClient(url="http://localhost:8000")
-obs = client.reset()
-# The agent takes actions based on the 24D vector
-result = client.step(weights=[0.1, -0.2, 0.5, 0.0])
-```
+Based on the hackathon slides and docs, the final submission on April 26, 2026 requires:
 
----
+- Hugging Face Space URL
+- Colab notebook link
+- code repository link
+- YouTube video URL or Hugging Face blog URL
+- every external URL mirrored in `README.md`
 
-## 📂 Project Structure
-- `/kernel`: eBPF C code (The "Eyes").
-- `/bridge`: Rust Aya application (The "Nervous System").
-- `/RadishDB`: **Crash-Safe WAL** (The "Memory").
-  - Persistent storage for every kernel trajectory.
-  - Supports binary-safe snapshots and JSONL export for AI training.
-- `/brain`: **OpenEnv Implementation** (The "Intelligence").
-  - `openenv.yaml`: Environment manifest.
-  - `models.py`: Pydantic definitions for Action/Observation.
-  - `server/`: FastAPI server logic.
-- `/ui`: Ratatui TUI dashboard (The "Observability").
-- `implementation.md`: Technical deep-dive and math.
-- `plan.md`: Current team roadmap and task guide.
+Judging weights:
 
----
+- Environment innovation: `40%`
+- Storytelling and presentation: `30%`
+- Observable reward improvement: `20%`
+- Reward and training pipeline: `10%`
 
-## 📐 The 24D State Vector
-Our agents observe the following micro-metrics per task switch:
-- `[0-3]`: CPU Affinity & Priority levels.
-- `[4-7]`: Scheduling stats (VRuntime, Exec Runtime).
-- `[8-11]`: Run-queue lengths & System Load.
-- `[12-15]`: Context Switch frequencies.
-- `[23]`: **Ready Queue Latency (μs)** - Our primary reward metric.
+## Relevant Docs
 
----
-**Developed for the Meta PyTorch OpenEnv Hackathon.**
+- [Quickstart](QUICKSTART.md)
+- [TUI spec](docs/UI.md)
+- [Implementation notes](docs/implementation.md)

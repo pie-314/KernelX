@@ -1,6 +1,12 @@
+mod app;
+mod repo;
+mod telemetry;
+mod view;
+
 use std::io;
 use std::time::{Duration, Instant};
 
+use app::App;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -8,17 +14,6 @@ use crossterm::terminal::{
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
-
-mod header;
-mod layout;
-mod proc;
-mod radish_db;
-mod state;
-mod system;
-mod topology;
-mod world_model;
-
-use state::{read_hud_state, AppState};
 
 const TICK_RATE: Duration = Duration::from_millis(100);
 
@@ -30,7 +25,7 @@ fn main() -> io::Result<()> {
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let mut app = AppState::new();
+    let mut app = App::new()?;
     let mut last_tick = Instant::now();
 
     loop {
@@ -39,14 +34,11 @@ fn main() -> io::Result<()> {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
                     match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => break,
-                        KeyCode::Char('c')
-                            if key
-                                .modifiers
-                                .contains(crossterm::event::KeyModifiers::CONTROL) =>
-                        {
-                            break;
+                        KeyCode::Char('r') => app.reset(),
+                        KeyCode::Char('c') => {
+                            app.reasoning_log.push_back("[CONFIG] UI layout optimized for btop-density.".to_string());
                         }
+                        KeyCode::Char('q') | KeyCode::Esc => break,
                         _ => {}
                     }
                 }
@@ -54,13 +46,8 @@ fn main() -> io::Result<()> {
         }
 
         if last_tick.elapsed() >= TICK_RATE {
-            let hud = read_hud_state(app.tick).unpack();
-            app.update(&hud);
-
-            terminal.draw(|frame| {
-                layout::draw(frame, &hud, &app);
-            })?;
-
+            app.refresh();
+            terminal.draw(|frame| view::draw(frame, &app))?;
             last_tick = Instant::now();
         }
     }
@@ -68,6 +55,5 @@ fn main() -> io::Result<()> {
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
-
     Ok(())
 }

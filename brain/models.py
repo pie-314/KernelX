@@ -7,6 +7,7 @@ class Observation(BaseModel):
     timestamp: int
     pid: int
     cpu: int
+    reward: float = 0.0
 
 class Action(BaseModel):
     """Priority weights for the process groups."""
