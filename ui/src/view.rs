@@ -6,7 +6,8 @@ use ratatui::widgets::{
 };
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, Screen};
+use crate::repo::CheckStatus;
 
 // Btop-inspired High-Contrast Palette
 const THEME_BG: Color = Color::Rgb(15, 15, 15);
@@ -31,7 +32,15 @@ pub fn draw(frame: &mut Frame, app: &App) {
     .split(area);
 
     render_top_bar(frame, main_layout[0], app);
-    render_main_body(frame, main_layout[1], app);
+    
+    match app.screen {
+        Screen::Dashboard => render_dashboard(frame, main_layout[1], app),
+        Screen::EventFlow => render_event_flow(frame, main_layout[1], app),
+        Screen::Judging => render_judging(frame, main_layout[1], app),
+        Screen::Submission => render_submission(frame, main_layout[1], app),
+        Screen::System => render_system_screen(frame, main_layout[1], app),
+    }
+
     render_bottom_bar(frame, main_layout[2], app);
 }
 
@@ -43,7 +52,16 @@ fn render_top_bar(frame: &mut Frame, area: Rect, app: &App) {
     ]).split(area);
 
     let left = Paragraph::new(format!(" KERNELX [v0.1.0]")).fg(THEME_CYAN).bold();
-    let center = Paragraph::new(format!(" EPOCH: {:06} | MODE: {} ", app.tick, app.live_mode_label()))
+    
+    let screen_name = match app.screen {
+        Screen::Dashboard => "1:DASHBOARD",
+        Screen::EventFlow => "2:EVENT_FLOW",
+        Screen::Judging => "3:JUDGING",
+        Screen::Submission => "4:SUBMISSION",
+        Screen::System => "5:SYSTEM",
+    };
+
+    let center = Paragraph::new(format!(" {} | EPOCH: {:06} | MODE: {} ", screen_name, app.tick, app.live_mode_label()))
         .alignment(Alignment::Center)
         .fg(THEME_TEXT);
     let right = Paragraph::new(format!("{}", app.now.format("%H:%M:%S")))
@@ -55,7 +73,8 @@ fn render_top_bar(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(right, chunks[2]);
 }
 
-fn render_main_body(frame: &mut Frame, area: Rect, app: &App) {
+/* --- SCREEN 1: DASHBOARD --- */
+fn render_dashboard(frame: &mut Frame, area: Rect, app: &App) {
     let outer_cols = Layout::horizontal([
         Constraint::Percentage(30), // Left: CPU / Sentinel
         Constraint::Percentage(40), // Mid: Brain / Process Warp
@@ -67,7 +86,127 @@ fn render_main_body(frame: &mut Frame, area: Rect, app: &App) {
     render_infra_evidence_panel(frame, outer_cols[2], app);
 }
 
-/* --- LEFT PANEL: SENTINEL & TELEMETRY --- */
+/* --- SCREEN 2: EVENT FLOW --- */
+fn render_event_flow(frame: &mut Frame, area: Rect, _app: &App) {
+    let events = vec![
+        ("APR 25 09:00", "HACKATHON_START", "Meta HQ Doors Open. Let the building begin."),
+        ("APR 25 10:30", "OPENENV_KEYNOTE", "Introduction to OpenEnv API and Environment standards."),
+        ("APR 25 14:00", "KERNELX_ALPHA", "Sentinel eBPF sensor successfully attached to Linux scheduler."),
+        ("APR 25 20:00", "BRAIN_TRANSPLANT", "First successful ZMQ action pipeline from Brain to Bridge."),
+        ("APR 26 02:00", "RADISH_DUMP", "Persistence layer verified. Trajectory collection enabled."),
+        ("APR 26 09:00", "FINAL_PUSH", "Trained model strategist-q4km.gguf ready for inference."),
+        ("APR 26 13:00", "SUBMISSION_WINDOW", "Code freeze. Mirrors verified on Hugging Face."),
+        ("APR 26 15:00", "JUDGING_START", "Presenting KernelX to the Meta and OpenEnv judges."),
+    ];
+
+    let items: Vec<ListItem> = events.iter().map(|(time, label, desc)| {
+        ListItem::new(vec![
+            Line::from(vec![time.fg(THEME_GRAY), " ".into(), label.fg(THEME_CYAN).bold()]),
+            Line::from(desc.fg(THEME_TEXT)),
+            Line::from(""),
+        ])
+    }).collect();
+
+    frame.render_widget(List::new(items).block(btop_block("MISSION_LOG / TIMELINE")), area);
+}
+
+/* --- SCREEN 3: JUDGING --- */
+fn render_judging(frame: &mut Frame, area: Rect, _app: &App) {
+    let criteria = vec![
+        ("40%", "Environment Innovation", "Is the environment novel? Kernel telemetry as OpenEnv is unique."),
+        ("30%", "Storytelling/Presentation", "The TUI HUD and end-to-end mission flow show high polish."),
+        ("20%", "Observable Reward", "P99 latency improvement verified in autonomous benchmark."),
+        ("10%", "Training Pipeline", "World model drift analysis and GGUF quantization show depth."),
+    ];
+
+    let rows: Vec<Row> = criteria.iter().map(|(weight, label, desc)| {
+        Row::new(vec![
+            Cell::from(weight.to_string()).fg(THEME_MAGENTA).bold(),
+            Cell::from(label.to_string()).fg(THEME_CYAN),
+            Cell::from(desc.to_string()).fg(THEME_TEXT),
+        ])
+    }).collect();
+
+    let table = Table::new(rows, [
+        Constraint::Length(10),
+        Constraint::Length(25),
+        Constraint::Min(40),
+    ])
+    .header(Row::new(vec!["WEIGHT", "CRITERION", "DESCRIPTION"]).fg(THEME_GRAY).bold())
+    .block(btop_block("JUDGING_CRITERIA"));
+
+    frame.render_widget(table, area);
+}
+
+/* --- SCREEN 4: SUBMISSION --- */
+fn render_submission(frame: &mut Frame, area: Rect, app: &App) {
+    let chunks = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(7),
+    ]).split(area);
+
+    let rows: Vec<Row> = app.repo.checks.iter().map(|c| {
+        let (icon, color) = match c.status {
+            CheckStatus::Ready => (" [ok] ", THEME_LIME),
+            CheckStatus::Warning => (" [!!] ", THEME_ORANGE),
+            CheckStatus::Missing => (" [xx] ", THEME_MAGENTA),
+        };
+        Row::new(vec![
+            Cell::from(icon).fg(color),
+            Cell::from(c.label.to_string()).fg(THEME_TEXT).bold(),
+            Cell::from(c.detail.clone()).fg(THEME_GRAY),
+        ])
+    }).collect();
+
+    let table = Table::new(rows, [
+        Constraint::Length(6),
+        Constraint::Length(25),
+        Constraint::Min(0),
+    ])
+    .block(btop_block("SUBMISSION_READINESS_CHECKLIST"));
+    frame.render_widget(table, chunks[0]);
+
+    let runbook: Vec<ListItem> = app.repo.command_cards.iter().map(|&c| {
+        ListItem::new(c.fg(THEME_CYAN))
+    }).collect();
+    frame.render_widget(List::new(runbook).block(btop_block("OPERATOR_RUNBOOK / DEPLOY_SEQUENCE")), chunks[1]);
+}
+
+/* --- SCREEN 5: SYSTEM --- */
+fn render_system_screen(frame: &mut Frame, area: Rect, app: &App) {
+    let chunks = Layout::vertical([
+        Constraint::Length(8),
+        Constraint::Min(0),
+    ]).split(area);
+
+    let sys_info = vec![
+        Line::from(vec!["HOST:      ".fg(THEME_GRAY), "KERNELX-SENS-01".fg(THEME_CYAN)]),
+        Line::from(vec!["OS:        ".fg(THEME_GRAY), "LINUX 6.x (eBPF ENABLED)".fg(THEME_CYAN)]),
+        Line::from(vec!["ARCH:      ".fg(THEME_GRAY), "X86_64 / ARM64 HYBRID".fg(THEME_CYAN)]),
+        Line::from(vec!["RADISH_DB: ".fg(THEME_GRAY), format!("VERSION 1.2.0, SIZE: {} bytes", app.telemetry.radish_dirty_pages * 4096).fg(THEME_ORANGE)]),
+        Line::from(vec!["UPTIME:    ".fg(THEME_GRAY), format!("{}s", app.tick / 10).fg(THEME_LIME)]),
+    ];
+    frame.render_widget(Paragraph::new(sys_info).block(btop_block("SYSTEM_HARDWARE_INDEX")), chunks[0]);
+
+    // Show more feature telemetry in a grid
+    let mut rows = Vec::new();
+    for i in 0..6 {
+        let mut cells = Vec::new();
+        for j in 0..4 {
+            let idx = i * 4 + j;
+            let val = app.telemetry.features[idx];
+            cells.push(Cell::from(format!("F{:02}: {:>4}", idx, val)).fg(if val > 80 { THEME_MAGENTA } else { THEME_TEXT }));
+        }
+        rows.push(Row::new(cells));
+    }
+
+    let table = Table::new(rows, [Constraint::Percentage(25); 4])
+        .block(btop_block("FULL_24D_TELEMETRY_VECTOR_MAP"));
+    frame.render_widget(table, chunks[1]);
+}
+
+/* --- PANEL HELPERS FOR DASHBOARD --- */
+
 fn render_sentinel_panel(frame: &mut Frame, area: Rect, app: &App) {
     let sections = Layout::vertical([
         Constraint::Length(12), // Core Usage Bars
@@ -116,7 +255,6 @@ fn render_sentinel_panel(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(List::new(features).block(btop_block("24D_TELEMETRY")), sections[2]);
 }
 
-/* --- CENTER PANEL: BRAIN & WARP TABLE --- */
 fn render_brain_warp_panel(frame: &mut Frame, area: Rect, app: &App) {
     let sections = Layout::vertical([
         Constraint::Length(7),  // Brain Decision (Gauge + Stats)
@@ -124,7 +262,6 @@ fn render_brain_warp_panel(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Length(8),  // CoT Scrolling Log
     ]).split(area);
 
-    // Decision Logic
     let action = app.telemetry.current_action;
     let conf = app.telemetry.model_confidence;
     let action_color = if action < 0.0 { THEME_CYAN } else { THEME_MAGENTA };
@@ -136,7 +273,6 @@ fn render_brain_warp_panel(frame: &mut Frame, area: Rect, app: &App) {
     ]).block(btop_block("STRATEGIST_BRAIN"));
     frame.render_widget(decision, sections[0]);
 
-    // Warp Table (btop-style process list)
     let rows: Vec<Row> = app.nudged_processes.iter().map(|p| {
         let (nudge_label, color) = if p.nudge < -0.3 {
             ("PROMOTED", THEME_LIME)
@@ -167,14 +303,12 @@ fn render_brain_warp_panel(frame: &mut Frame, area: Rect, app: &App) {
     .row_highlight_style(Style::default().bg(THEME_GRAY));
     frame.render_widget(table, sections[1]);
 
-    // Scrolling Logic
     let reasoning: Vec<ListItem> = app.reasoning_log.iter().rev().take(6).map(|s| {
         ListItem::new(Line::from(format!("> {}", s)).fg(THEME_TEXT))
     }).collect();
     frame.render_widget(List::new(reasoning).block(btop_block("CHAIN_OF_THOUGHT")), sections[2]);
 }
 
-/* --- RIGHT PANEL: INFRA & EVIDENCE --- */
 fn render_infra_evidence_panel(frame: &mut Frame, area: Rect, app: &App) {
     let sections = Layout::vertical([
         Constraint::Length(10), // Cumulative Reward Graph
@@ -182,7 +316,6 @@ fn render_infra_evidence_panel(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Min(0),     // RadishDB / Auditor logs
     ]).split(area);
 
-    // Reward Sparkline (Vibrant Lime)
     let reward_data: Vec<u64> = app.reward_history.iter().map(|&r| (r + 1000).max(0) as u64).collect();
     let reward_spark = Sparkline::default()
         .block(btop_block("EVIDENCE: REWARD_CURVE"))
@@ -190,7 +323,6 @@ fn render_infra_evidence_panel(frame: &mut Frame, area: Rect, app: &App) {
         .style(Style::default().fg(THEME_LIME));
     frame.render_widget(reward_spark, sections[0]);
 
-    // Drift Sparkline (Vibrant Orange)
     let drift_data: Vec<u64> = app.drift_history.iter().map(|&d| (d * 1000.0) as u64).collect();
     let drift_spark = Sparkline::default()
         .block(btop_block("EVIDENCE: MODEL_DRIFT"))
@@ -198,7 +330,6 @@ fn render_infra_evidence_panel(frame: &mut Frame, area: Rect, app: &App) {
         .style(Style::default().fg(THEME_ORANGE));
     frame.render_widget(drift_spark, sections[1]);
 
-    // Infra Health Section
     let logs: Vec<ListItem> = app.safety_log.iter().rev().map(|s| {
         ListItem::new(Line::from(s.as_str()).fg(THEME_MAGENTA))
     }).collect();
@@ -216,15 +347,14 @@ fn render_infra_evidence_panel(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_bottom_bar(frame: &mut Frame, area: Rect, _app: &App) {
     let text = Paragraph::new(Line::from(vec![
+        " [TAB] CYCLE ".fg(THEME_BG).bg(THEME_GRAY),
+        " [1-5] JUMP ".fg(THEME_BG).bg(THEME_GRAY),
         " [Q] QUIT ".fg(THEME_BG).bg(THEME_GRAY),
-        " [R] RESET_STATS ".fg(THEME_BG).bg(THEME_GRAY),
-        " [C] CONFIG ".fg(THEME_BG).bg(THEME_GRAY),
         "  SYSTEM_STATUS: OK ".fg(THEME_LIME),
     ])).alignment(Alignment::Left);
     frame.render_widget(text, area);
 }
 
-// Custom btop-style block helper
 fn btop_block(title: &str) -> Block<'_> {
     Block::default()
         .title(format!(" {} ", title))

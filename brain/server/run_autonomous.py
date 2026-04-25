@@ -15,7 +15,7 @@ RL agent client.
 import argparse
 import time
 import sys
-from kernelx_environment import KernelXEnvironment
+from .kernelx_environment import KernelXEnvironment
 
 
 def main():

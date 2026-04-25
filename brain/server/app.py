@@ -1,11 +1,10 @@
-from openenv_core import create_fastapi_app
+from openenv.core import create_fastapi_app
 from .kernelx_environment import KernelXEnvironment
-
-# Initialize the core environment
-env = KernelXEnvironment()
+from ..models import Observation, Action
 
 # Create the FastAPI app with OpenEnv routing
-app = create_fastapi_app(env)
+# Pass the class itself, as the server will instantiate it
+app = create_fastapi_app(KernelXEnvironment, action_cls=Action, observation_cls=Observation)
 
 if __name__ == "__main__":
     import uvicorn

@@ -8,6 +8,8 @@ from typing import Tuple, Optional
 from openenv_core import Environment
 from ..models import Observation, Action, State
 from .policy import ManualPolicy
+from .trained_policy import TrainedPolicy
+
 
 SHM_PATH = "/dev/shm/kernelx_state"
 SHM_SIZE = 340
@@ -18,7 +20,11 @@ class KernelXEnvironment(Environment[Observation, Action, State]):
         self.episode_id = str(uuid.uuid4())
         self.step_count = 0
         self.shm = None
-        self.policy = ManualPolicy()  # Initialize manual policy
+        # Resolve model path relative to this file
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        model_path = os.path.join(current_dir, "..", "..", "training", "models", "strategist-q4km.gguf")
+        self.policy = TrainedPolicy(model_path)
+
         
         # Initialize ZMQ Socket to talk to Rust Bridge
         try:

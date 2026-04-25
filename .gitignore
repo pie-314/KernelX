@@ -20,7 +20,10 @@ trajectories.jsonl
 training/data/*.jsonl
 training/models/*/
 training/logs/
+*.json
+*.jsonl
 *.gguf
+*.aof
 *.safetensors
 *.bin
 *.pt

@@ -51,10 +51,10 @@ pub struct TelemetrySnapshot {
 pub fn read(tick: u64) -> TelemetrySnapshot {
     #[cfg(target_os = "linux")]
     if let Ok(state) = read_live() {
-        // In a real scenario, we'd also pull extended metrics from SHM or other sources.
-        // For this high-fidelity demo, we mix live base metrics with derived/mocked extended metrics
-        // to show the full potential of the UI.
-        let extended = mock_extended_metrics(tick, state.p99_wait_us, state.is_clamped != 0);
+        // Use real fields from SHM if they are being populated by the bridge
+        // We still use mock_extended_metrics for safety_logs if they aren't in SHM
+        let mock_ext = mock_extended_metrics(tick, state.p99_wait_us, state.is_clamped != 0);
+        
         return TelemetrySnapshot {
             source: TelemetrySource::Live,
             features: state.features,
@@ -63,12 +63,13 @@ pub fn read(tick: u64) -> TelemetrySnapshot {
             is_clamped: state.is_clamped != 0,
             reasoning: parse_reasoning(&state.reasoning),
             p99_wait_us: state.p99_wait_us,
-            model_confidence: extended.model_confidence,
-            world_model_drift: extended.world_model_drift,
-            radish_wal_fill: extended.radish_wal_fill,
-            radish_dirty_pages: extended.radish_dirty_pages,
-            core_heat: extended.core_heat,
-            safety_logs: extended.safety_logs,
+            // Prefer SHM fields if they are non-zero (indicating bridge is updating them)
+            model_confidence: if state.model_confidence > 0.0 { state.model_confidence } else { mock_ext.model_confidence },
+            world_model_drift: if state.world_model_drift > 0.0 { state.world_model_drift } else { mock_ext.world_model_drift },
+            radish_wal_fill: (state.radish_wal_size as f32 / 10_000_000.0).min(1.0), // Scale 10MB to 100%
+            radish_dirty_pages: state.radish_dirty_pages,
+            core_heat: state.core_heat,
+            safety_logs: mock_ext.safety_logs,
         };
     }
 
