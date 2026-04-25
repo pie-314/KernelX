@@ -57,11 +57,23 @@ def heuristic_policy(state: list) -> float:
 # ---------------------------------------------------------------------------
 
 class StrategistWrapper:
-    """Wraps a GGUF model for use in the demo."""
+    """Wraps a HF or GGUF model for use in the demo."""
 
     def __init__(self, model_path: str):
-        from llama_cpp import Llama
-        self.llm = Llama(model_path=model_path, n_ctx=512, n_threads=4, verbose=False)
+        if model_path.endswith(".gguf"):
+            from llama_cpp import Llama
+            self.llm = Llama(model_path=model_path, n_ctx=512, n_threads=4, verbose=False)
+            self.backend = "gguf"
+        else:
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_path, torch_dtype="float32", device_map="cpu"
+            )
+            self.model.eval()
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+            self.backend = "hf"
 
     def predict(self, state: list, pid: int, cpu: int) -> tuple:
         state_str = format_state(state)
@@ -75,12 +87,22 @@ class StrategistWrapper:
         )
 
         start = time.perf_counter()
-        output = self.llm(prompt, max_tokens=8, temperature=0.2)
+
+        if self.backend == "gguf":
+            output = self.llm(prompt, max_tokens=8, temperature=0.2)
+            text = output["choices"][0]["text"]
+        else:
+            inputs = self.tokenizer(prompt, return_tensors="pt")
+            out = self.model.generate(
+                **inputs, max_new_tokens=8, temperature=0.3,
+                do_sample=True, pad_token_id=self.tokenizer.eos_token_id,
+            )
+            full = self.tokenizer.decode(out[0], skip_special_tokens=False)
+            text = full.split("<|assistant|>")[-1] if "<|assistant|>" in full else full
+
         latency = (time.perf_counter() - start) * 1000
 
-        text = output["choices"][0]["text"]
         action_match = re.search(r"([-+]?\d*\.?\d+)", text)
-
         action = float(action_match.group(1)) if action_match else 0.0
         action = max(-1.0, min(1.0, action))
 
@@ -291,8 +313,8 @@ def build_gradio_app(
 def main():
     parser = argparse.ArgumentParser(description="KernelX Gradio Demo")
     parser.add_argument("--test-data", required=True, help="Path to test.jsonl")
-    parser.add_argument("--strategist-model", default=None, help="GGUF Strategist model")
-    parser.add_argument("--world-model", default=None, help="GGUF World Model")
+    parser.add_argument("--strategist-model", default=None, help="Path to strategist model (HF dir or GGUF file)")
+    parser.add_argument("--world-model", default=None, help="Path to world model (HF dir or GGUF file)")
     parser.add_argument("--no-model", action="store_true", help="Run without trained models")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--share", action="store_true", help="Create public Gradio link")
