@@ -1,0 +1,26 @@
+{
+  "symlog_features": [4, 5, 6],
+  "active_features": [0, 1, 2, 3, 4, 5, 6, 7, 12, 23],
+  "feature_names": ["cpu", "prio", "sprio", "nprio", "exec_ns", "vrt", "migr", "cpus", "csw", "wt_us"],
+  "passthrough_features": [0, 7, 12, 23],
+  "priority_features": [1, 2, 3],
+  "sparse_zero_features": [8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
+  "feature_descriptions": {
+    "0": "bpf_get_smp_processor_id() - CPU core ID",
+    "1": "task->prio - Dynamic priority (0-139)",
+    "2": "task->static_prio - Static priority (nice-based)",
+    "3": "task->normal_prio - Normal priority",
+    "4": "task->se.sum_exec_runtime - Total CPU time in ns (symlog-scaled)",
+    "5": "task->se.vruntime - CFS virtual runtime (symlog-scaled)",
+    "6": "task->se.nr_migrations - CPU migration count (symlog-scaled)",
+    "7": "task->nr_cpus_allowed - CPU affinity mask size",
+    "12": "context switch count from cpu_stats",
+    "23": "wait time in microseconds ((now - start_ts) / 1000)"
+  },
+  "model": {
+    "name": "HuggingFaceTB/SmolLM2-360M-Instruct",
+    "backup": "Qwen/Qwen2.5-0.5B-Instruct",
+    "max_seq_length": 512,
+    "target_inference_ms": 50
+  }
+}

@@ -1,0 +1,12 @@
+torch>=2.0
+transformers>=4.40
+trl>=0.12
+unsloth
+peft>=0.13
+datasets>=2.18
+accelerate>=0.30
+llama-cpp-python>=0.3
+wandb
+pandas
+numpy
+gradio>=4.0

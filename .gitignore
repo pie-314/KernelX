@@ -16,6 +16,17 @@ vmlinux.h
 *.log
 trajectories.jsonl
 
+# Training artifacts
+training/data/*.jsonl
+training/models/*/
+training/logs/
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+wandb/
+
 # Python
 __pycache__/
 *.py[cod]
