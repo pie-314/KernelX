@@ -3,6 +3,11 @@
 **An OpenEnv-compliant world-modeling environment for Linux kernel scheduling.**
 
 KernelX teaches a 360-million-parameter language model to make Linux scheduling decisions in real time. An eBPF sentinel extracts a 24-dimensional state vector at every context switch, a learned World Model predicts the consequences of each action, and a GRPO-trained Strategist outputs scheduling nudges in 44 milliseconds on a laptop CPU.
+## Demo
+
+![Project Demo](tui.gif)
+
+## Links
 
 Built for the Meta PyTorch OpenEnv Hackathon 2026 — Theme 3.1, World Modeling.
 
