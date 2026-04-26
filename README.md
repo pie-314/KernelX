@@ -17,6 +17,67 @@ KernelX is an OpenEnv-compatible environment that uses reinforcement learning to
 
 ## Architecture
 
+## Detailed Architecture & System Flow
+
+KernelX operates as a high-frequency control loop between the Linux Kernel's scheduling subsystem and a Transformer-based intelligence layer.
+
+### 1. System Architecture Diagram
+
+```mermaid
+graph TD
+    subgraph "Linux Kernel Space"
+        K[Kernel Scheduler] -->|sched_switch| E[eBPF Sentinel]
+        E -->|24D Telemetry| RB[BPF Ring Buffer]
+        PAM[Priority Actions Map] -->|Update vruntime/prio| K
+    end
+
+    subgraph "Userspace: Rust Bridge"
+        RB -->|Async Read| RBR[Ring Buffer Reader]
+        RBR -->|MMap| SHM[Shared Memory /dev/shm]
+        RBR -->|Persistence| TJ[Trajectories JSONL]
+        ZMQ_SUB[ZMQ Subscriber] -->|Write| PAM
+    end
+
+    subgraph "Userspace: Python Brain (OpenEnv)"
+        SHM -->|Observation| ENV[KernelX OpenEnv]
+        ENV -->|Tokenized Prompt| LLM[SmolLM2 Strategist]
+        LLM -->|Scheduling Action| ENV
+        ENV -->|ZMQ Pub| ZMQ_PUB[ZMQ Publisher]
+        ZMQ_PUB --> ZMQ_SUB
+    end
+
+    subgraph "Offline Training Pipeline"
+        TJ -->|Feature Scaling| DS[Preprocessed Dataset]
+        DS -->|Phase 1: SFT| LLM
+        DS -->|Phase 2: GRPO| LLM
+    end
+```
+
+### 2. Functional Component Breakdown
+
+#### A. eBPF Sentinel (The Sensor)
+The sentinel is a CO-RE (Compile Once – Run Everywhere) BPF program attached to the `sched/sched_switch` tracepoint. At every context switch, it captures a 24-dimensional feature vector including:
+- **Temporal Metrics:** `sum_exec_runtime`, `vruntime`, and `wait_us`.
+- **System Pressure:** Context switch frequency and CPU migration counts.
+- **Task Metadata:** PID, Priority, and CPU affinity.
+
+#### B. Rust Bridge (The Nervous System)
+A high-performance bridge written in Rust handles the boundary between kernel and userspace. It utilizes a `BPF_MAP_TYPE_RINGBUF` for lockless data transfer. It performs two critical tasks:
+1. **Shared Memory Sync:** Updates `/dev/shm/kernelx_state` at <1ms latency for the UI and Brain.
+2. **Action Feedback:** Listens via ZMQ for decisions from the Brain and writes them into the BPF `priority_actions` map, where the kernel applies the priority "nudge."
+
+#### C. Python Brain (The Intelligence)
+The Brain is an **OpenEnv-compliant** server. It treats the Linux kernel as a Reinforcement Learning environment:
+- **Observation:** Reads the current 10D active feature vector from SHM.
+- **Inference:** Uses a quantized **SmolLM2-360M** model to generate a scheduling action in the range `[-1.0, 1.0]`. 
+- **Safety Auditor:** A lightweight "clamping" logic ensures the AI never moves a process into a dangerous priority state, maintaining system stability.
+
+#### D. GRPO Training Pipeline (The Optimization)
+KernelX uses **Group Relative Policy Optimization (GRPO)**. Unlike standard PPO, GRPO allows the model to learn from groups of generations without a separate value function, which is ideal for the high-variance environment of kernel scheduling.
+1. **SFT Warm-start:** Teaches the model the system prompt and output format.
+2. **GRPO RL:** Replays trajectories through a World Model simulator to reward actions that minimize `wait_us` while maximizing `exec_runtime` (throughput).
+
+
 ```
 Linux Kernel (eBPF sentinel)
     | 24D telemetry at sched_switch (CPU, priority, vruntime, wait_us...)
