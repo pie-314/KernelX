@@ -200,10 +200,11 @@ def train_model(
         gradient_accumulation_steps=4,
         learning_rate=2e-4,
         fp16=False,  # MPS compatible
-        max_seq_length=512,
+        max_length=512,
         logging_steps=5,
         save_steps=100,
         report_to="none",
+        use_cpu=True,
     )
 
     trainer = SFTTrainer(
