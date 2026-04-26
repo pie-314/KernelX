@@ -73,7 +73,7 @@ pub fn scan(root: &Path) -> RepoScan {
             } else {
                 CheckStatus::Missing
             },
-            detail: "KernelX can run autonomously through the manual policy loop".to_string(),
+            detail: "KernelX can run autonomously through the policy execution loop".to_string(),
         },
         SubmissionCheck {
             label: "Notebook / Colab",

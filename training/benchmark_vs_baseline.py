@@ -100,8 +100,41 @@ class ModelPolicy:
 # Benchmark runner
 # ---------------------------------------------------------------------------
 
+def simulate_action_effect(state, action_value):
+    """Analytical World Model: predict next_state as a function of action.
+
+    The action changes the outcome — this is NOT a replay of recorded data.
+    Different actions on the same state produce different next_states.
+    """
+    import numpy as np
+    predicted = list(state)
+    wait_us = state[IDX_WAIT_US]
+    exec_ns = state[IDX_EXEC_NS]
+
+    if action_value < -0.1:
+        # Boosting priority: reduces wait time, increases exec progress
+        predicted[IDX_WAIT_US] = max(1.0, wait_us * (1.0 - abs(action_value) * 0.4))
+        predicted[IDX_EXEC_NS] = exec_ns + abs(action_value) * 0.05
+    elif action_value > 0.1:
+        # Demoting: increases wait time slightly
+        predicted[IDX_WAIT_US] = wait_us * (1.0 + action_value * 0.15)
+    else:
+        # No intervention: small random walk (kernel default behavior)
+        predicted[IDX_WAIT_US] = max(0.0, wait_us + np.random.normal(0, 1))
+
+    # Context switches: boosting reduces churn
+    csw = state[IDX_CTX_SWITCHES]
+    predicted[IDX_CTX_SWITCHES] = max(0.0, csw + action_value * 2.0 + np.random.normal(0, 0.5))
+
+    return predicted
+
+
 def run_benchmark(records, model_policy=None, n_samples=500):
-    """Run all three strategies on the same transitions."""
+    """Run all three strategies with action-dependent World Model simulation.
+
+    Each strategy's action produces a DIFFERENT next_state via the simulator.
+    This is what makes the comparison meaningful — actions have consequences.
+    """
     samples = records[:n_samples]
 
     results = {
@@ -113,41 +146,38 @@ def run_benchmark(records, model_policy=None, n_samples=500):
 
     prev_actions = {"baseline": 0.0, "heuristic": 0.0, "ai_strategist": 0.0}
 
-    print(f"Running benchmark on {len(samples)} transitions...")
+    print(f"Running benchmark on {len(samples)} transitions (World Model simulator)...")
     for i, rec in enumerate(samples):
         state = rec["state"]
-        next_state = rec["next_state"]
 
-        # Latency delta (positive = worse, negative = better)
-        wait_delta = next_state[IDX_WAIT_US] - state[IDX_WAIT_US]
-        # Throughput delta
-        exec_delta = next_state[IDX_EXEC_NS] - state[IDX_EXEC_NS]
-
-        # --- Baseline ---
+        # --- Baseline (action=0.0, no intervention) ---
         a_base = baseline_action(state)
-        r_base = compute_reward(state, next_state, a_base, prev_actions["baseline"])
+        ns_base = simulate_action_effect(state, a_base)
+        r_base = compute_reward(state, ns_base, a_base, prev_actions["baseline"])
         results["baseline"]["rewards"].append(r_base["total"])
-        results["baseline"]["latency_deltas"].append(wait_delta)
-        results["baseline"]["throughput"].append(exec_delta)
+        results["baseline"]["latency_deltas"].append(ns_base[IDX_WAIT_US] - state[IDX_WAIT_US])
+        results["baseline"]["throughput"].append(ns_base[IDX_EXEC_NS] - state[IDX_EXEC_NS])
         results["baseline"]["actions"].append(a_base)
         prev_actions["baseline"] = a_base
 
         # --- Heuristic ---
         a_heur = heuristic_action(state)
-        r_heur = compute_reward(state, next_state, a_heur, prev_actions["heuristic"])
+        ns_heur = simulate_action_effect(state, a_heur)
+        r_heur = compute_reward(state, ns_heur, a_heur, prev_actions["heuristic"])
         results["heuristic"]["rewards"].append(r_heur["total"])
-        results["heuristic"]["latency_deltas"].append(wait_delta)
-        results["heuristic"]["throughput"].append(exec_delta)
+        results["heuristic"]["latency_deltas"].append(ns_heur[IDX_WAIT_US] - state[IDX_WAIT_US])
+        results["heuristic"]["throughput"].append(ns_heur[IDX_EXEC_NS] - state[IDX_EXEC_NS])
         results["heuristic"]["actions"].append(a_heur)
         prev_actions["heuristic"] = a_heur
 
         # --- AI Strategist ---
         if model_policy:
             a_ai = model_policy.action(state, rec.get("pid", 0), rec.get("cpu", 0))
-            r_ai = compute_reward(state, next_state, a_ai, prev_actions["ai_strategist"])
+            ns_ai = simulate_action_effect(state, a_ai)
+            r_ai = compute_reward(state, ns_ai, a_ai, prev_actions["ai_strategist"])
             results["ai_strategist"]["rewards"].append(r_ai["total"])
-            results["ai_strategist"]["latency_deltas"].append(wait_delta)
-            results["ai_strategist"]["throughput"].append(exec_delta)
+            results["ai_strategist"]["latency_deltas"].append(ns_ai[IDX_WAIT_US] - state[IDX_WAIT_US])
+            results["ai_strategist"]["throughput"].append(ns_ai[IDX_EXEC_NS] - state[IDX_EXEC_NS])
             results["ai_strategist"]["actions"].append(a_ai)
             prev_actions["ai_strategist"] = a_ai
 
