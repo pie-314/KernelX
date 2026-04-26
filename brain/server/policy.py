@@ -139,49 +139,49 @@ class ManualPolicy:
           [2] = batch/background
           [3] = idle/best-effort
         
-        Weight scale: -100 (lowest priority) to +100 (highest priority)
+        Weight scale: -1.0 (highest priority boost) to +1.0 (lowest priority/throttled)
         """
         weights = [0.0, 0.0, 0.0, 0.0]
         
         # 1. Very High Load: Emergency Throttling of the current task to save system stability
         if cpu_load > 0.9:
-            weights = [40.0, 20.0, 10.0, 0.0] # POSITIVE = Throttle/Demote
+            weights = [0.4, 0.2, 0.1, 0.0] # POSITIVE = Throttle/Demote
         
         # 2. High CPU load: aggressive prioritization
         elif cpu_load > 0.7:
-            weights = [-50.0, -30.0, 50.0, 30.0]
+            weights = [-0.5, -0.3, 0.5, 0.3]
         
         # 3. Moderate CPU load: prioritize interactive
         elif cpu_load > 0.3:
-            weights = [-20.0, -15.0, 20.0, 15.0]
+            weights = [-0.2, -0.15, 0.2, 0.15]
             
         # 4. Under normal load: light boost
         else:
-            weights = [-10.0, -5.0, 5.0, 10.0]
+            weights = [-0.1, -0.05, 0.05, 0.1]
         
         # 4. High memory pressure: reduce batch workloads
         if memory_pressure > 0.8:
-            weights[2] += 30.0  # penalize batch
-            weights[0] -= 10.0  # boost critical for cleanup
+            weights[2] += 0.3  # penalize batch
+            weights[0] -= 0.1  # boost critical for cleanup
         
         # 5. High I/O activity: boost I/O-bound processes slightly
         if io_activity > 0.7:
-            weights[1] -= 15.0  # interactive often does I/O
+            weights[1] -= 0.15  # interactive often does I/O
         
         # 6. Rising latency: boost critical processes
         if latency_trend > 0.5:
-            weights[0] -= 20.0
-            weights[1] -= 10.0
-            weights[2] += 10.0
+            weights[0] -= 0.2
+            weights[1] -= 0.1
+            weights[2] += 0.1
         
         # 7. High latency spike: emergency boost
         if latency > 100.0:  # arbitrary threshold
-            weights[0] = -80.0
-            weights[1] = -40.0
-            weights[2] = 60.0
-            weights[3] = 80.0
+            weights[0] = -0.8
+            weights[1] = -0.4
+            weights[2] = 0.6
+            weights[3] = 0.8
         
-        # Clamp all weights to valid range
-        weights = [float(np.clip(w, -100.0, 100.0)) for w in weights]
+        # Clamp all weights to valid range [-1.0, 1.0]
+        weights = [float(np.clip(w, -1.0, 1.0)) for w in weights]
         
         return weights

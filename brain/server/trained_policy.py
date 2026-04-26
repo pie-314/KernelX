@@ -43,16 +43,16 @@ def format_state(active_features):
 
 
 def action_to_weights(action_value):
-    """Convert a single action float [-1, 1] to 4 priority weights [-100, 100]."""
+    """Convert a single action float [-1, 1] to 4 priority weights [-10, 10]."""
     a = float(np.clip(action_value, -1.0, 1.0))
-    scale = abs(a) * 100.0
+    scale = abs(a) * 10.0
 
     if a < -0.1:
         return [-scale, -scale * 0.6, scale * 0.5, scale * 0.3]
     elif a > 0.1:
         return [scale * 0.3, scale * 0.5, -scale * 0.6, -scale]
     else:
-        return [-5.0, -2.0, 2.0, 5.0]
+        return [-0.5, -0.2, 0.2, 0.5]
 
 
 class TrainedPolicy:
@@ -111,6 +111,6 @@ class TrainedPolicy:
 
         # Convert single action to 4 weights
         weights = action_to_weights(action_val)
-        weights = [float(np.clip(w, -100.0, 100.0)) for w in weights]
+        weights = [float(np.clip(w, -10.0, 10.0)) for w in weights]
 
         return Action(weights=weights)

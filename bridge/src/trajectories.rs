@@ -56,7 +56,7 @@ impl TrajectoryManager {
     }
 
     /// Records a state transition and persists it to disk if it meets filtering criteria.
-    pub fn record_transition(&mut self, current_event: KernelXEvent) -> Result<()> {
+    pub fn record_transition(&mut self, current_event: KernelXEvent, action: f32) -> Result<()> {
         let pid = current_event.pid;
 
         // 1. Check if we have a previous state for this PID
@@ -72,7 +72,7 @@ impl TrajectoryManager {
             if high_pain || random_sample {
                 let transition = Transition {
                     state_t: *old_event,
-                    action: 0.0,
+                    action,
                     reward,
                     state_t_next: current_event,
                 };

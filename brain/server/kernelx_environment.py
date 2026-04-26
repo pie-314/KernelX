@@ -158,7 +158,8 @@ class KernelXEnvironment(Environment[Observation, Action, State]):
     def _apply_action(self, action: Action):
         if self.shm:
             try:
-                weight = float(action.weights[0])
+                # Divide by 10 to normalize the policy's [-10, 10] weights to [-1, 1] for the kernel
+                weight = float(action.weights[0]) / 10.0
                 self.shm.seek(196)
                 pid_bytes = self.shm.read(4)
                 active_pid = int.from_bytes(pid_bytes, "little")
