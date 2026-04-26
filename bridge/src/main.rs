@@ -164,12 +164,25 @@ fn main() -> Result<()> {
                         let len = r_src.len().min(128);
                         r_bytes[..len].copy_from_slice(&r_src[..len]);
                         s.reasoning = r_bytes;
+                        
+                        println!("[Bridge] Received AI Action: PID={} Weight={:.4} Reason=\"{}\"", pid, weight, reason);
                     }
 
-                    // Update BPF Actuator Map
+                    // Update BPF Actuator Map only if we are in a high-latency state
                     if pid > 0 {
-                        let mut pa = pa_clone.lock().unwrap();
-                        let _ = pa.insert(pid, weight as i64, 0);
+                        let current_wait = {
+                            let s = z_state.lock().unwrap();
+                            s.p99_wait_us
+                        };
+
+                        if current_wait > 1000 {
+                            let mut pa = pa_clone.lock().unwrap();
+                            let _ = pa.insert(pid, weight as i64, 0);
+                        } else {
+                            // Optionally clear the action if latency has dropped
+                            let mut pa = pa_clone.lock().unwrap();
+                            let _ = pa.remove(&pid);
+                        }
                     }
                 }
             }
@@ -192,25 +205,26 @@ fn main() -> Result<()> {
     while running.load(Ordering::SeqCst) {
         while let Some(item) = events_ring.next() {
             if let Ok(event) = bytemuck::try_from_bytes::<KernelXEvent>(&item) {
-                // Persist to RadishDB
-                persistence::persist_event(event);
-                
-                let mut s = shared_state.lock().unwrap();
-                s.features = event.features;
-                s.p99_wait_us = event.features[23];
-                s.active_pid = event.pid;
-                
-                // Copy to SHM
-                mmap.copy_from_slice(bytemuck::bytes_of(&*s));
-
-                // Record transition if enabled
-                if let Some(ref mut m) = manager {
-                    if let Err(e) = m.record_transition(*event) {
-                        eprintln!("[Error] Trajectory record failed: {e}");
-                    }
-                }
-
+                // Only process "high-pain" events where latency > 1000us
                 if event.features[23] > 1000 {
+                    // Persist to RadishDB
+                    persistence::persist_event(event);
+                    
+                    let mut s = shared_state.lock().unwrap();
+                    s.features = event.features;
+                    s.p99_wait_us = event.features[23];
+                    s.active_pid = event.pid;
+                    
+                    // Copy to SHM
+                    mmap.copy_from_slice(bytemuck::bytes_of(&*s));
+
+                    // Record transition if enabled
+                    if let Some(ref mut m) = manager {
+                        if let Err(e) = m.record_transition(*event) {
+                            eprintln!("[Error] Trajectory record failed: {e}");
+                        }
+                    }
+
                     println!(
                         "24D | PID: {:<6} | Wait: {:>5}us | VRuntime: {:>10}",
                         event.pid,
