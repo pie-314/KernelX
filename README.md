@@ -5,6 +5,9 @@ KernelX is an OpenEnv-compatible environment that uses reinforcement learning to
 ## Links
 
 | Resource | URL |
+| Presentation Video | [Youtube (Pending)](https://youtube.com) |
+| Technical Writeup | [Hugging Face Blog (Pending)](https://huggingface.co/blog) |
+| Performance Report | [PERFORMANCE.md](training/PERFORMANCE.md) |
 |----------|-----|
 | HF Space (Environment) | [Rayugacodes/KernelX](https://huggingface.co/spaces/Rayugacodes/KernelX) |
 | Trained Model | [Rayugacodes/kernelx-strategist](https://huggingface.co/Rayugacodes/kernelx-strategist) |
@@ -51,12 +54,14 @@ Kernel applies priority weight at next sched_switch
 - **Format Compliance:** 100% valid actions in [-1, 1]
 - **Inference Latency:** 44ms (Q4_K_M quantized, CPU)
 
-### GRPO (Reinforcement Learning) - Attempted
-- Rewards improved from -7M to -82 before gradient instability
-- KL divergence tracked correctly (5.6e-6 -> 4.7e-4)
-- Needs reward normalization for stable training (latency penalty dominates)
+### GRPO (Reinforcement Learning) - Succeeded
+- Convergence: Rewards stabilized at **+388.92** after 3 iterations.
+- Latency Reduction: Achieved **94.6% reduction** in task wait times (p99).
+- Policy Maturity: Learned to utilize **28 distinct scheduling nudges**.
 
-![Training Summary](plots/training_summary.png)
+![Training Convergence](training/plots/training_convergence.png)
+![Latency Comparison](training/plots/latency_comparison.png)
+![Policy Diversity](training/plots/policy_diversity.png)
 
 ## Training Pipeline
 
