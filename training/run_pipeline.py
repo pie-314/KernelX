@@ -7,12 +7,12 @@ Runs all stages end-to-end: preprocess -> World Model SFT -> Strategist GRPO -> 
 Usage:
     # Full pipeline
     python training/run_pipeline.py \
-        --raw-data data/state_transitions.jsonl \
+        --raw-data data/trajectories.json \
         --output-root training
 
     # Resume from a specific stage
     python training/run_pipeline.py \
-        --raw-data data/state_transitions.jsonl \
+        --raw-data data/trajectories.json \
         --output-root training \
         --start-stage 3
 
@@ -31,7 +31,7 @@ from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser(description="KernelX full training pipeline")
-    parser.add_argument("--raw-data", required=True, help="Path to raw state_transitions.jsonl")
+    parser.add_argument("--raw-data", default="trajectories.json", help="Path to raw trajectories.json")
     parser.add_argument("--output-root", default="training", help="Root output directory")
     parser.add_argument("--start-stage", type=int, default=1, help="Stage to start from (1-5)")
     parser.add_argument("--end-stage", type=int, default=5, help="Stage to end at (1-5)")

@@ -32,7 +32,7 @@ def setup(hf_token: str):
     data_dir = Path("data")
     data_dir.mkdir(exist_ok=True)
 
-    for fname in ["state_transitions.jsonl", "train.jsonl", "val.jsonl", "test.jsonl", "preprocessing_config.json"]:
+    for fname in ["trajectories.json", "train.jsonl", "val.jsonl", "test.jsonl", "preprocessing_config.json"]:
         path = hf_hub_download(
             repo_id="Rayugacodes/kernelx-training-data",
             filename=fname,

@@ -11,19 +11,19 @@ Orchestrates the collect → train → deploy → repeat cycle:
 Usage:
     # Run one full iteration (collect 5min → train → deploy)
     python3 -m training.policy_iteration \
-        --trajectories-path /path/to/trajectories.jsonl \
+        --trajectories-path /path/to/trajectories.json \
         --model-output training/models/strategist-q4km.gguf \
         --collect-duration 300
 
     # Skip collection (already have data)
     python3 -m training.policy_iteration \
-        --trajectories-path data/state_transitions.jsonl \
+        --trajectories-path data/trajectories.json \
         --model-output training/models/strategist-q4km.gguf \
         --skip-collect
 
     # Full automated loop (N iterations)
     python3 -m training.policy_iteration \
-        --trajectories-path /path/to/trajectories.jsonl \
+        --trajectories-path /path/to/trajectories.json \
         --iterations 3 \
         --collect-duration 300
 """
@@ -411,7 +411,7 @@ def run_iteration(
 def main():
     parser = argparse.ArgumentParser(description="KernelX Policy Iteration Loop")
     parser.add_argument("--trajectories-path", required=True,
-                        help="Path to trajectories.jsonl from the bridge")
+                        help="Path to trajectories.json from the bridge")
     parser.add_argument("--model-output",
                         default="training/models/strategist-q4km.gguf",
                         help="Output path for the GGUF model")

@@ -47,7 +47,7 @@ impl TrajectoryManager {
             .create(true)
             .append(true)
             .open(path)
-            .context("Failed to open trajectories.jsonl")?;
+            .context("Failed to open trajectories.json")?;
 
         Ok(Self {
             history: HashMap::new(),

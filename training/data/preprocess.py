@@ -1,13 +1,13 @@
 """
 KernelX Intelligence Layer — Data Ingestion and Preprocessing (Stage 1)
 
-Reads raw state_transitions.jsonl from the bridge's TrajectoryManager,
+Reads raw trajectories.json from the bridge's TrajectoryManager,
 applies feature scaling (symlog for huge counters), drops sparse-zero
 features, and produces train/val/test splits for World Model and
 Strategist training.
 
 Usage:
-    python -m training.data.preprocess --input data/state_transitions.jsonl
+    python -m training.data.preprocess --input data/trajectories.json
 """
 
 import json
@@ -211,7 +211,7 @@ def run_pipeline(input_path: str, output_dir: str, audit: bool = True):
 
 def main():
     parser = argparse.ArgumentParser(description="KernelX data preprocessing pipeline")
-    parser.add_argument("--input", required=True, help="Path to raw state_transitions.jsonl")
+    parser.add_argument("--input", required=True, help="Path to raw trajectories.json")
     parser.add_argument("--output-dir", default=str(Path(__file__).parent), help="Output directory for processed data")
     parser.add_argument("--no-audit", action="store_true", help="Skip the dataset audit step")
     args = parser.parse_args()

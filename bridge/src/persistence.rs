@@ -5,24 +5,19 @@ use lazy_static::lazy_static;
 
 use crate::trajectories::KernelXEvent;
 
-/* C FFI Bindings */
+/* C FFI Bindings - from radish_ffi.h */
 extern "C" {
-    fn ht_create(size: i32) -> *mut c_void;
-    fn ht_set(ht: *mut c_void, key: *const c_void, klen: usize, value: *const c_void, vlen: usize, expires_at: i64);
-    fn ht_free(ht: *mut c_void);
-    fn aof_open(filename: *const c_char) -> i32;
-    fn aof_append_set(key: *const c_void, klen: usize, value: *const c_void, vlen: usize, expires_at: i64);
+    fn radish_ht_create(initial_size: i32) -> *mut c_void;
+    fn radish_ht_set(ht: *mut c_void, key: *const c_void, klen: usize, value: *const c_void, vlen: usize, expires_at: i64);
+    fn radish_ht_free(ht: *mut c_void);
+    fn radish_aof_open(filename: *const c_char) -> i32;
+    fn radish_aof_append(key: *const c_void, klen: usize, value: *const c_void, vlen: usize, expires_at: i64);
     fn radish_export_json(ht: *mut c_void, filename: *const c_char) -> i32;
-    fn aof_get_size() -> usize;
+    fn radish_aof_get_size() -> usize;
 }
 
 pub fn get_aof_size() -> u64 {
-    unsafe { aof_get_size() as u64 }
-}
-
-pub enum RadishMode {
-    Perception = 0,
-    Training = 1,
+    unsafe { radish_aof_get_size() as u64 }
 }
 
 struct RadishDB {
@@ -31,29 +26,37 @@ struct RadishDB {
 
 unsafe impl Send for RadishDB {}
 
+struct PersistenceState {
+    db: Option<RadishDB>,
+}
+
+unsafe impl Send for PersistenceState {}
+
 lazy_static! {
-    static ref DB: Mutex<Option<RadishDB>> = Mutex::new(None);
+    static ref STATE: Mutex<PersistenceState> = Mutex::new(PersistenceState {
+        db: None,
+    });
 }
 
 pub fn init(aof_path: &str) -> Result<(), String> {
-    let mut db_lock = DB.lock().unwrap();
-    if db_lock.is_some() {
+    let mut state = STATE.lock().unwrap();
+    if state.db.is_some() {
         return Ok(());
     }
 
     unsafe {
-        let ht = ht_create(1024); // Large initial size for KernelX
+        let ht = radish_ht_create(1024);
         if ht.is_null() {
             return Err("Failed to create RadishDB Hashtable".to_string());
         }
 
         let c_path = CString::new(aof_path).unwrap();
-        if aof_open(c_path.as_ptr()) == 0 {
-            ht_free(ht);
+        if radish_aof_open(c_path.as_ptr()) == 0 {
+            radish_ht_free(ht);
             return Err(format!("Failed to open RadishDB AOF at {}", aof_path));
         }
 
-        *db_lock = Some(RadishDB { ht });
+        state.db = Some(RadishDB { ht });
     }
     
     println!("[RadishDB] WAL initialized at {}", aof_path);
@@ -61,8 +64,9 @@ pub fn init(aof_path: &str) -> Result<(), String> {
 }
 
 pub fn persist_event(event: &KernelXEvent) {
-    let db_lock = DB.lock().unwrap();
-    if let Some(ref db) = *db_lock {
+    let state = STATE.lock().unwrap();
+    
+    if let Some(ref db) = state.db {
         unsafe {
             // Key: PID (4 bytes)
             let key = &event.pid as *const u32 as *const c_void;
@@ -70,17 +74,17 @@ pub fn persist_event(event: &KernelXEvent) {
             let val = event as *const KernelXEvent as *const c_void;
             
             // Log to In-Memory Hash Table
-            ht_set(db.ht, key, 4, val, std::mem::size_of::<KernelXEvent>(), 0);
+            radish_ht_set(db.ht, key, 4, val, std::mem::size_of::<KernelXEvent>(), 0);
             
             // Log to Write-Ahead Log (AOF)
-            aof_append_set(key, 4, val, std::mem::size_of::<KernelXEvent>(), 0);
+            radish_aof_append(key, 4, val, std::mem::size_of::<KernelXEvent>(), 0);
         }
     }
 }
 
 pub fn export_to_json(path: &str) -> Result<(), String> {
-    let db_lock = DB.lock().unwrap();
-    if let Some(ref db) = *db_lock {
+    let state = STATE.lock().unwrap();
+    if let Some(ref db) = state.db {
         let c_path = CString::new(path).unwrap();
         unsafe {
             if radish_export_json(db.ht, c_path.as_ptr()) == 1 {

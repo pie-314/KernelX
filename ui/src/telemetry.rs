@@ -144,7 +144,7 @@ fn read_model_status() -> ModelStatus {
     };
 
     // Check transitions count
-    let transitions = std::fs::metadata("training/data/state_transitions.jsonl")
+    let transitions = std::fs::metadata("trajectories.json")
         .map(|m| m.len() / 300) // rough estimate: ~300 bytes per line
         .unwrap_or(0);
 

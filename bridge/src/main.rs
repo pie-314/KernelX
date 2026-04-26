@@ -1,5 +1,6 @@
 /**
  * KernelX Bridge: Final "Metal" implementation with real telemetry and ZMQ control loop.
+ * Updated with recording flags and EbpfLogger reference.
  */
 use std::{
     fs,
@@ -12,8 +13,9 @@ use std::{
 
 use anyhow::{Context, Result};
 use aya::{maps::{RingBuf, HashMap as BpfHashMap}, programs::TracePoint, Ebpf};
+use aya_log::EbpfLogger;
 use bytemuck::{Pod, Zeroable};
-use kernelx_bridge::trajectories::KernelXEvent;
+use kernelx_bridge::trajectories::{KernelXEvent, TrajectoryManager};
 use kernelx_bridge::persistence;
 use memmap2::MmapMut;
 
@@ -83,6 +85,7 @@ fn main() -> Result<()> {
     let r = running.clone();
     ctrlc::set_handler(move || {
         r.store(false, Ordering::SeqCst);
+        println!("\n[Bridge] Shutdown signal received.");
     }).expect("Error setting Ctrl-C handler");
 
     // 1. Initialize RadishDB
@@ -95,15 +98,37 @@ fn main() -> Result<()> {
     
     let shared_state = Arc::new(Mutex::new(HUDState::zeroed()));
 
-    // 3. Start ZMQ Control Listener (Brain -> Bridge)
+    // 3. Parse Arguments
+    let args: Vec<String> = std::env::args().collect();
+    let should_record = args.iter().any(|arg| arg == "--record");
+    
+    let object_path = args.iter()
+        .skip(1)
+        .find(|arg| !arg.starts_with("--"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_BPF_OBJECT));
+
+    // 4. Initialize Trajectory Manager if requested
+    let mut manager = if should_record {
+        println!("[Bridge] Recording enabled. Saving to trajectories.json");
+        Some(TrajectoryManager::new("trajectories.json")?)
+    } else {
+        None
+    };
+
+    // 5. Start ZMQ Control Listener (Brain -> Bridge)
     let z_state = shared_state.clone();
     let z_running = running.clone();
 
-    // 4. Load eBPF
-    let object_path = PathBuf::from(DEFAULT_BPF_OBJECT);
+    // 6. Load eBPF
+    println!("[Bridge] Loading eBPF object: {}", object_path.display());
     let object = fs::read(&object_path).with_context(|| "Failed to read BPF object")?;
     let mut bpf = Ebpf::load(&object).context("Failed to parse BPF object")?;
     
+    if let Err(err) = EbpfLogger::init(&mut bpf) {
+        eprintln!("[Warn] aya-log unavailable: {err}");
+    }
+
     let priority_actions: BpfHashMap<aya::maps::MapData, u32, i64> = BpfHashMap::try_from(bpf.take_map("priority_actions").context("Map priority_actions not found")?)?;
     let pa_mutex = Arc::new(Mutex::new(priority_actions));
     let pa_clone = pa_mutex.clone();
@@ -151,7 +176,7 @@ fn main() -> Result<()> {
         }
     });
 
-    // 5. Attach eBPF Programs
+    // 7. Attach eBPF Programs
     attach_tracepoint(&mut bpf, "handle_sched_wakeup", "sched", "sched_wakeup")?;
     let switch_prog: &mut aya::programs::RawTracePoint = bpf.program_mut("handle_sched_switch").unwrap().try_into()?;
     switch_prog.load()?;
@@ -160,20 +185,39 @@ fn main() -> Result<()> {
     let mut events_ring = RingBuf::try_from(bpf.take_map("events").unwrap())?;
     let mut cpu_tracker = CpuTracker::new();
     let mut last_infra_update = Instant::now();
+    let mut last_export = Instant::now();
 
-    println!("[Bridge] System online. REAL telemetry enabled.");
+    println!("[Bridge] System online. Extracting 24D Vectors...");
 
     while running.load(Ordering::SeqCst) {
         while let Some(item) = events_ring.next() {
             if let Ok(event) = bytemuck::try_from_bytes::<KernelXEvent>(&item) {
+                // Persist to RadishDB
                 persistence::persist_event(event);
                 
                 let mut s = shared_state.lock().unwrap();
                 s.features = event.features;
                 s.p99_wait_us = event.features[23];
+                s.active_pid = event.pid;
                 
                 // Copy to SHM
                 mmap.copy_from_slice(bytemuck::bytes_of(&*s));
+
+                // Record transition if enabled
+                if let Some(ref mut m) = manager {
+                    if let Err(e) = m.record_transition(*event) {
+                        eprintln!("[Error] Trajectory record failed: {e}");
+                    }
+                }
+
+                if event.features[23] > 1000 {
+                    println!(
+                        "24D | PID: {:<6} | Wait: {:>5}us | VRuntime: {:>10}",
+                        event.pid,
+                        event.features[23],
+                        event.features[5]
+                    );
+                }
             }
         }
 
@@ -188,10 +232,29 @@ fn main() -> Result<()> {
             last_infra_update = Instant::now();
         }
 
+        // Periodic Radish Export (10s)
+        if last_export.elapsed() >= Duration::from_secs(10) {
+            let _ = persistence::export_to_json("radish_export.json");
+            last_export = Instant::now();
+        }
+
         thread::sleep(Duration::from_millis(10));
     }
 
-    println!("[Bridge] Shutting down.");
+    println!("[Bridge] Shutting down...");
+    
+    if let Some(mut m) = manager {
+        if let Err(e) = m.flush() {
+            eprintln!("[Error] Flush failed: {e}");
+        } else {
+            println!("[Bridge] Trajectories saved to disk (trajectories.json).");
+        }
+    }
+    
+    // Final Radish Export
+    println!("[Bridge] Exporting experience store to radish_export.json...");
+    let _ = persistence::export_to_json("radish_export.json");
+    
     Ok(())
 }
 
