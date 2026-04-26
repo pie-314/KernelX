@@ -15,17 +15,22 @@ SHM_PATH = "/dev/shm/kernelx_state"
 SHM_SIZE = 340
 ZMQ_BRIDGE_URL = "tcp://127.0.0.1:5555"
 
+# Default GGUF model path (relative to project root)
+DEFAULT_GGUF = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..", "..", "training", "models", "strategist-q4km.gguf"
+)
+
 class KernelXEnvironment(Environment[Observation, Action, State]):
     def __init__(self):
         self.episode_id = str(uuid.uuid4())
         self.step_count = 0
         self.shm = None
-        # Resolve model path relative to this file
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        model_path = os.path.join(current_dir, "..", "..", "training", "models", "strategist-q4km.gguf")
-        self.policy = TrainedPolicy(model_path)
+        self.policy_path = None
 
-        
+        # Load best available policy: GGUF > ManualPolicy
+        self._load_best_policy()
+
         # Initialize ZMQ Socket to talk to Rust Bridge
         try:
             self.zmq_ctx = zmq.Context()
@@ -47,6 +52,42 @@ class KernelXEnvironment(Environment[Observation, Action, State]):
             print(f"[Warn] SHM file not found. Using simulated data.")
         
         print(f"[KernelX] OpenEnv Server Initialized. Session: {self.episode_id}")
+
+    def _load_best_policy(self):
+        """Load the best available policy: trained GGUF > manual heuristic."""
+        if os.path.exists(DEFAULT_GGUF):
+            try:
+                self.policy = TrainedPolicy(DEFAULT_GGUF)
+                self.policy_path = DEFAULT_GGUF
+                print(f"[KernelX] Loaded trained policy: {DEFAULT_GGUF}")
+                return
+            except Exception as e:
+                print(f"[KernelX] Failed to load GGUF: {e}. Falling back to heuristic.")
+
+        self.policy = ManualPolicy()
+        self.policy_path = None
+        print("[KernelX] Using ManualPolicy (heuristic)")
+
+    def reload_policy(self, model_path: str = None):
+        """Hot-swap the active policy with a new model.
+
+        Called by the policy iteration loop after training completes.
+        If model_path is None, reloads from the default GGUF path.
+        """
+        path = model_path or DEFAULT_GGUF
+        if not os.path.exists(path):
+            print(f"[KernelX] reload_policy: {path} not found, keeping current policy")
+            return False
+
+        try:
+            new_policy = TrainedPolicy(path)
+            self.policy = new_policy
+            self.policy_path = path
+            print(f"[KernelX] Policy reloaded: {path}")
+            return True
+        except Exception as e:
+            print(f"[KernelX] reload_policy failed: {e}")
+            return False
 
     def reset(self) -> Observation:
         self.step_count = 0
