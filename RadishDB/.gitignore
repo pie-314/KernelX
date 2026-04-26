@@ -1,0 +1,21 @@
+# Compiled binaries
+*.o
+*.out
+*.exe
+*.a
+radishdb
+
+# Build outputs
+hashtable
+radishdb
+build/
+
+# Debug files
+*.gch
+*.log
+
+# macOS / Linux junk
+.DS_Store
+
+# AOF file
+aof/*.aof
