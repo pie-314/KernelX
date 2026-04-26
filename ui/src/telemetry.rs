@@ -125,26 +125,41 @@ fn read_system_metrics(sys: &mut System) -> SystemMetrics {
 }
 
 fn read_model_status() -> ModelStatus {
-    // Check if GGUF model exists
+    // Check if GGUF model exists - paths relative to the project root
     let gguf_path = "training/models/strategist-q4km.gguf";
     let warmstart_path = "training/models/strategist_warmstart";
     let merged_path = "training/models/strategist_merged";
 
-    let (mode, version, size) = if Path::new(gguf_path).exists() {
-        let size = std::fs::metadata(gguf_path)
+    // Attempt to find the project root by looking for common markers
+    let mut root = std::env::current_dir().unwrap_or_else(|_| ".".into());
+    for _ in 0..3 {
+        if root.join("training").exists() || root.join("brain").exists() {
+            break;
+        }
+        if let Some(parent) = root.parent() {
+            root = parent.to_path_buf();
+        }
+    }
+
+    let p_gguf = root.join(gguf_path);
+    let p_merged = root.join(merged_path);
+    let p_warmstart = root.join(warmstart_path);
+
+    let (mode, version, size) = if p_gguf.exists() {
+        let size = std::fs::metadata(&p_gguf)
             .map(|m| m.len() as f32 / (1024.0 * 1024.0))
             .unwrap_or(0.0);
         (PolicyMode::TrainedV1, "strategist-q4km.gguf".into(), size)
-    } else if Path::new(merged_path).exists() {
+    } else if p_merged.exists() {
         (PolicyMode::TrainedV1, "strategist-merged (HF)".into(), 0.0)
-    } else if Path::new(warmstart_path).exists() {
+    } else if p_warmstart.exists() {
         (PolicyMode::TrainedV1, "strategist-warmstart".into(), 0.0)
     } else {
         (PolicyMode::Heuristic, "ManualPolicy (rules)".into(), 0.0)
     };
 
     // Check transitions count
-    let transitions = std::fs::metadata("trajectories.json")
+    let transitions = std::fs::metadata(root.join("trajectories.json"))
         .map(|m| m.len() / 300) // rough estimate: ~300 bytes per line
         .unwrap_or(0);
 
