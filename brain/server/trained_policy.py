@@ -4,18 +4,11 @@ KernelX Trained ML Policy — GGUF Strategist Integration
 Replaces the ManualPolicy with the trained SmolLM2-360M strategist model.
 Loads the quantized GGUF model and converts kernel observations into
 scheduling actions via the same interface the environment expects.
-
-Usage:
-    Replace ManualPolicy in kernelx_environment.py:
-        from .trained_policy import TrainedPolicy
-        self.policy = TrainedPolicy("path/to/strategist-q4km.gguf")
 """
 
 import re
 import numpy as np
-
 from brain.models import Action, Observation
-
 
 # ---------------------------------------------------------------------------
 # Feature mapping (must match training/data/preprocessing_config.json)
@@ -50,26 +43,15 @@ def format_state(active_features):
 
 
 def action_to_weights(action_value):
-    """Convert a single action float [-1, 1] to 4 priority weights [-100, 100].
-
-    Mapping:
-        action < 0 = boost priority (negative = promote current task)
-        action > 0 = demote priority (positive = yield to others)
-        action ~ 0 = neutral
-
-    Weight groups: [real-time, interactive, batch, idle]
-    """
+    """Convert a single action float [-1, 1] to 4 priority weights [-100, 100]."""
     a = float(np.clip(action_value, -1.0, 1.0))
     scale = abs(a) * 100.0
 
     if a < -0.1:
-        # Boost: negative weights to promote
         return [-scale, -scale * 0.6, scale * 0.5, scale * 0.3]
     elif a > 0.1:
-        # Demote: positive weights to suppress
         return [scale * 0.3, scale * 0.5, -scale * 0.6, -scale]
     else:
-        # Neutral: minimal adjustment
         return [-5.0, -2.0, 2.0, 5.0]
 
 
@@ -77,27 +59,27 @@ class TrainedPolicy:
     """GGUF-based trained scheduling policy for KernelX."""
 
     def __init__(self, model_path: str, n_threads: int = 4, max_tokens: int = 8):
-        from llama_cpp import Llama
-
-        self.llm = Llama(
-            model_path=model_path,
-            n_ctx=512,
-            n_threads=n_threads,
-            verbose=False,
-        )
+        try:
+            from llama_cpp import Llama
+            self.llm = Llama(
+                model_path=model_path,
+                n_ctx=512,
+                n_threads=n_threads,
+                verbose=False,
+            )
+        except ImportError:
+            print("[Error] llama-cpp-python not installed.")
+            self.llm = None
+            
         self.max_tokens = max_tokens
         self.last_action = 0.0
+        self.last_reasoning = "Initializing trained policy..."
         print(f"[TrainedPolicy] Loaded GGUF model: {model_path}")
 
     def decide(self, obs: Observation) -> Action:
-        """Make a scheduling decision from a kernel observation.
+        if not self.llm:
+            return Action(weights=[0.0, 0.0, 0.0, 0.0])
 
-        Args:
-            obs: Observation with 24D features from kernel
-
-        Returns:
-            Action with 4 priority weights [-100, 100]
-        """
         # Preprocess: 24D raw -> 10D active (symlog scaled)
         active = preprocess_observation(obs.features)
         state_str = format_state(active)
@@ -125,6 +107,7 @@ class TrainedPolicy:
             action_val = 0.0
 
         self.last_action = action_val
+        self.last_reasoning = f"Strategist: Inferred action {action_val:.4f} for PID {obs.pid} based on latency trend."
 
         # Convert single action to 4 weights
         weights = action_to_weights(action_val)

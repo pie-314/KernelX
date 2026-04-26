@@ -1,4 +1,4 @@
-from openenv.core import create_fastapi_app
+from openenv_core import create_fastapi_app
 from brain.server.kernelx_environment import KernelXEnvironment
 from brain.models import Observation, Action
 
@@ -7,27 +7,34 @@ from brain.models import Observation, Action
 app = create_fastapi_app(KernelXEnvironment, action_cls=Action, observation_cls=Observation)
 
 
+# --- OpenEnv Compliance Endpoints ---
+
+@app.get("/tasks")
+async def get_tasks():
+    """Returns official OpenEnv tasks for judges."""
+    env = getattr(app.state, "env", None)
+    if env:
+        return {"tasks": env.get_tasks()}
+    return {"error": "Environment not initialized"}
+
+
+@app.get("/evaluate")
+async def evaluate_episode():
+    """Provides normalized score [0.01, 0.99] for the current session."""
+    env = getattr(app.state, "env", None)
+    if env:
+        return env.evaluate()
+    return {"error": "Environment not initialized"}
+
+
 # --- Policy Iteration Integration ---
-# Expose an endpoint for the policy iteration loop to hot-swap models
 
 @app.post("/reload-policy")
 async def reload_policy(model_path: str = None):
-    """Hot-swap the active policy model. Called by training/policy_iteration.py."""
-    # Access the environment instance from the OpenEnv app state
-    env = None
-    for route in app.routes:
-        if hasattr(route, "endpoint") and hasattr(route.endpoint, "__self__"):
-            obj = route.endpoint.__self__
-            if isinstance(obj, KernelXEnvironment):
-                env = obj
-                break
-
+    """Hot-swap the active policy model."""
+    env = getattr(app.state, "env", None)
     if env is None:
-        # Try app.state
-        env = getattr(app.state, "env", None)
-
-    if env is None:
-        return {"status": "error", "message": "Environment not found in app state"}
+        return {"status": "error", "message": "Environment not found"}
 
     success = env.reload_policy(model_path)
     return {
@@ -50,4 +57,6 @@ async def policy_status():
 
 if __name__ == "__main__":
     import uvicorn
+    # Store env in app state so endpoints can access it
+    # Note: openenv-core usually handles instantiation
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -30,17 +30,12 @@ If the kernel sensor or bridge is unavailable, the TUI still runs in `MOCK DEMO`
 
 ## TUI Controls
 
-- `Tab`, `h`, `l`: switch screens
-- `1-5`: jump to a screen
 - `q`: quit
+- `r`: reset history
 
 Screens:
 
-1. `Live Dashboard`
-2. `Event Flow`
-3. `Judging`
-4. `Submission`
-5. `System`
+1. `Mission Control Dashboard` (Unified high-density telemetry, AI reasoning, and rewards)
 
 ## Data Contract
 
@@ -55,10 +50,15 @@ struct HUDState {
     is_clamped: u32,
     reasoning: [u8; 128],
     p99_wait_us: u64,
+    core_heat: [f32; 4],
+    model_confidence: f32,
+    world_model_drift: f32,
+    radish_wal_size: u64,
+    radish_dirty_pages: u32,
 }
 ```
 
-The brain server uses the same layout with `SHM_SIZE = 340`.
+The brain server uses the same layout with `SHM_SIZE = 376`.
 
 ## Submission Notes
 

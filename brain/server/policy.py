@@ -30,6 +30,7 @@ class ManualPolicy:
         self.last_latency = 0.0
         self.latency_history = []
         self.max_history = 10
+        self.last_reasoning = "Initializing heuristic policy..."
         
     def decide(self, obs: Observation) -> Action:
         """
@@ -64,6 +65,8 @@ class ManualPolicy:
             latency=latency,
             latency_trend=latency_trend
         )
+        
+        self.last_reasoning = f"Heuristic: CPU={cpu_load:.2f}, Latency={latency:.1f}us. Applying priority shift."
         
         return Action(weights=weights)
     
@@ -140,21 +143,21 @@ class ManualPolicy:
         """
         weights = [0.0, 0.0, 0.0, 0.0]
         
-        # Base heuristics:
+        # 1. Very High Load: Emergency Throttling of the current task to save system stability
+        if cpu_load > 0.9:
+            weights = [40.0, 20.0, 10.0, 0.0] # POSITIVE = Throttle/Demote
         
-        # 1. Under normal load: balanced scheduling
-        if cpu_load < 0.3 and memory_pressure < 0.5:
-            weights = [-10.0, -5.0, 5.0, 10.0]
-        
-        # 2. Under moderate CPU load: prioritize interactive over batch
-        elif cpu_load < 0.7:
-            # Boost interactive, suppress batch
-            weights = [-20.0, -15.0, 20.0, 15.0]
-        
-        # 3. High CPU load: aggressive prioritization
-        else:
-            # Strongly prioritize critical/interactive, suppress batch/idle
+        # 2. High CPU load: aggressive prioritization
+        elif cpu_load > 0.7:
             weights = [-50.0, -30.0, 50.0, 30.0]
+        
+        # 3. Moderate CPU load: prioritize interactive
+        elif cpu_load > 0.3:
+            weights = [-20.0, -15.0, 20.0, 15.0]
+            
+        # 4. Under normal load: light boost
+        else:
+            weights = [-10.0, -5.0, 5.0, 10.0]
         
         # 4. High memory pressure: reduce batch workloads
         if memory_pressure > 0.8:

@@ -4,11 +4,12 @@ import os
 import numpy as np
 import mmap
 import zmq
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List, Dict, Any
 from openenv_core import Environment
 from brain.models import Observation, Action, State
 from brain.server.policy import ManualPolicy
 from brain.server.trained_policy import TrainedPolicy
+from brain.server.grader import LLMGrader
 
 
 SHM_PATH = "/dev/shm/kernelx_state"
@@ -27,9 +28,19 @@ class KernelXEnvironment(Environment[Observation, Action, State]):
         self.step_count = 0
         self.shm = None
         self.policy_path = None
+        
+        # OpenEnv Task Definitions
+        self.tasks = [
+            {"id": "latency_recovery", "description": "Reduce P99 wait time below 500us"},
+            {"id": "throughput_max", "description": "Maximize execution runtime across active PIDs"},
+            {"id": "safety_alignment", "description": "Issue actions that pass the LLM Grader check"}
+        ]
 
         # Load best available policy: GGUF > ManualPolicy
         self._load_best_policy()
+        
+        # Initialize LLM Grader (Meta R2 Requirement)
+        self.grader = LLMGrader(model_path=DEFAULT_GGUF if os.path.exists(DEFAULT_GGUF) else None)
 
         # Initialize ZMQ Socket to talk to Rust Bridge
         try:
@@ -69,14 +80,9 @@ class KernelXEnvironment(Environment[Observation, Action, State]):
         print("[KernelX] Using ManualPolicy (heuristic)")
 
     def reload_policy(self, model_path: str = None):
-        """Hot-swap the active policy with a new model.
-
-        Called by the policy iteration loop after training completes.
-        If model_path is None, reloads from the default GGUF path.
-        """
         path = model_path or DEFAULT_GGUF
         if not os.path.exists(path):
-            print(f"[KernelX] reload_policy: {path} not found, keeping current policy")
+            print(f"[KernelX] reload_policy: {path} not found")
             return False
 
         try:
@@ -95,91 +101,78 @@ class KernelXEnvironment(Environment[Observation, Action, State]):
         return self._get_observation()
 
     def step(self, action: Optional[Action] = None) -> Observation:
-        # Get current observation
+        # 1. Get current observation
         obs = self._get_observation()
         
-        # If no action provided, use the manual policy to generate one
+        # 2. If no action provided, use policy to generate one
         if action is None:
             action = self.policy.decide(obs)
         
-        # Apply Action to the Bridge (and then to the Kernel)
+        # 3. Extract reasoning for the Grader
+        reasoning = getattr(self.policy, "last_reasoning", "Autonomous policy nudge")
+
+        # 4. Apply Action to the Bridge
         self._apply_action(action)
         
-        # Collect next observation
+        # 5. Collect next observation
         time.sleep(0.01) 
         next_obs = self._get_observation()
         self.step_count += 1
         
-        # Attach reward for telemetry
-        next_obs.reward = self._calculate_reward(next_obs)
+        # 6. Grade the performance (OpenEnv Compliance)
+        grading = self.grader.calculate_score(obs, next_obs, reasoning)
+        next_obs.reward = grading["score"] # Reward is now normalized 0.01 - 0.99
+        
+        if self.step_count % 10 == 0:
+            print(f"[KernelX] Step {self.step_count}: Score={next_obs.reward:.4f} | Feedback: {grading['feedback']}")
+        
         return next_obs
+
+    def evaluate(self) -> Dict[str, Any]:
+        """Final evaluation of the current episode."""
+        obs = self._get_observation()
+        return {
+            "episode_id": self.episode_id,
+            "total_steps": self.step_count,
+            "final_score": obs.reward,
+            "status": "completed"
+        }
+
+    def get_tasks(self) -> List[Dict[str, str]]:
+        """Return the list of tasks for the judges."""
+        return self.tasks
 
     def _get_observation(self) -> Observation:
         if self.shm:
             try:
                 self.shm.seek(0)
                 data = self.shm.read(SHM_SIZE)
-                
-                # features: [u64; 24] -> 192 bytes
                 features = np.frombuffer(data[:192], dtype=np.uint64).astype(float).tolist()
-                
-                # active_pid: u32 -> offset 196 (after current_action: f32 at 192)
                 pid = int.from_bytes(data[196:200], "little")
-                
-                return Observation(
-                    features=features,
-                    timestamp=int(time.time_ns()),
-                    pid=pid,
-                    cpu=0
-                )
+                return Observation(features=features, timestamp=int(time.time_ns()), pid=pid, cpu=0)
             except Exception as e:
                 print(f"[KernelX] SHM Read error: {e}")
         
-        # Fallback to random if SHM is missing or fails
-        return Observation(
-            features=list(np.random.rand(24).astype(float)),
-            timestamp=int(time.time_ns()),
-            pid=0,
-            cpu=0
-        )
+        return Observation(features=list(np.random.rand(24).astype(float)), timestamp=int(time.time_ns()), pid=0, cpu=0)
 
     def _apply_action(self, action: Action):
-        """Send the priority weights to the Rust Bridge."""
         if self.shm:
             try:
-                # Convert float decision [-100, 100] to weight
                 weight = float(action.weights[0])
-                
-                # Peek at the current active PID from SHM
                 self.shm.seek(196)
                 pid_bytes = self.shm.read(4)
                 active_pid = int.from_bytes(pid_bytes, "little")
-                
-                # If no active PID from kernel, use a dummy one for UI verification
                 target_pid = active_pid if active_pid > 0 else 9999
                 
-                # Format: "PID:WEIGHT:CONFIDENCE:DRIFT:REASONING"
                 confidence = 0.95
                 drift = 0.01
-                reason = "Autonomous policy nudge"
+                reason = getattr(self.policy, "last_reasoning", "Policy nudge")
                 
                 cmd = f"{target_pid}:{weight}:{confidence}:{drift}:{reason}"
-                print(f"[KernelX] Sending ZMQ Action -> {cmd}")
                 self.zmq_socket.send_string(cmd, zmq.NOBLOCK)
             except Exception as e:
-                print(f"[KernelX] _apply_action failed: {e}")
+                pass
 
-    def _calculate_reward(self, obs: Observation) -> float:
-        # R = -latency (simplified reward)
-        latency = obs.features[23] if len(obs.features) > 23 else 0.0
-        return -float(latency)
-    
     @property
     def state(self) -> State:
-        """Return current state metadata."""
-        return State(
-            episode_id=self.episode_id,
-            step_count=self.step_count,
-            latency_p99=0.0,
-            cpu_usage=0.0
-        )
+        return State(episode_id=self.episode_id, step_count=self.step_count, latency_p99=0.0, cpu_usage=0.0)
