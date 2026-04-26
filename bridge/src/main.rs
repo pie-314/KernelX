@@ -91,14 +91,15 @@ fn main() -> Result<()> {
     // 1. Initialize RadishDB
     persistence::init(RADISH_AOF_PATH).map_err(|e| anyhow::anyhow!(e))?;
 
-    // 2. Initialize SHM
+    // 3. Initialize SHM
     let shm_file = fs::OpenOptions::new().read(true).write(true).create(true).open(SHM_PATH)?;
     shm_file.set_len(std::mem::size_of::<HUDState>() as u64)?;
-    let mut mmap = unsafe { MmapMut::map_mut(&shm_file)? };
+    let mmap_raw = unsafe { MmapMut::map_mut(&shm_file)? };
+    let mmap_mutex = Arc::new(Mutex::new(mmap_raw));
     
     let shared_state = Arc::new(Mutex::new(HUDState::zeroed()));
 
-    // 3. Parse Arguments
+    // 4. Parse Arguments
     let args: Vec<String> = std::env::args().collect();
     let should_record = args.iter().any(|arg| arg == "--record");
     
@@ -108,7 +109,7 @@ fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_BPF_OBJECT));
 
-    // 4. Initialize Trajectory Manager if requested
+    // 5. Initialize Trajectory Manager if requested
     let mut manager = if should_record {
         println!("[Bridge] Recording enabled. Saving to trajectories.json");
         Some(TrajectoryManager::new("trajectories.json")?)
@@ -116,11 +117,12 @@ fn main() -> Result<()> {
         None
     };
 
-    // 5. Start ZMQ Control Listener (Brain -> Bridge)
+    // 6. Start ZMQ Control Listener (Brain -> Bridge)
     let z_state = shared_state.clone();
     let z_running = running.clone();
+    let z_mmap = mmap_mutex.clone();
 
-    // 6. Load eBPF
+    // 5. Load eBPF
     println!("[Bridge] Loading eBPF object: {}", object_path.display());
     let object = fs::read(&object_path).with_context(|| "Failed to read BPF object")?;
     let mut bpf = Ebpf::load(&object).context("Failed to parse BPF object")?;
@@ -144,7 +146,7 @@ fn main() -> Result<()> {
         while z_running.load(Ordering::SeqCst) {
             if let Ok(Ok(msg)) = socket.recv_string(0) {
                 // Format: "PID:WEIGHT:CONFIDENCE:DRIFT:REASONING"
-                let parts: Vec<&str> = msg.split(':').collect();
+                let parts: Vec<&str> = msg.splitn(5, ':').collect();
                 if parts.len() >= 5 {
                     let pid: u32 = parts[0].parse().unwrap_or(0);
                     let weight: f32 = parts[1].parse().unwrap_or(0.0);
@@ -165,31 +167,24 @@ fn main() -> Result<()> {
                         r_bytes[..len].copy_from_slice(&r_src[..len]);
                         s.reasoning = r_bytes;
                         
-                        println!("[Bridge] Received AI Action: PID={} Weight={:.4} Reason=\"{}\"", pid, weight, reason);
+                        // Immediate Sync to SHM so TUI reflects the change instantly
+                        let mut mmap = z_mmap.lock().unwrap();
+                        mmap.copy_from_slice(bytemuck::bytes_of(&*s));
+                        
+                        println!("[Bridge] Received AI Action: PID={} Weight={:.4}", pid, weight);
                     }
 
-                    // Update BPF Actuator Map only if we are in a high-latency state
+                    // Update BPF Actuator Map (NO LATENCY GATE HERE - allow proactive nudges)
                     if pid > 0 {
-                        let current_wait = {
-                            let s = z_state.lock().unwrap();
-                            s.p99_wait_us
-                        };
-
-                        if current_wait > 1000 {
-                            let mut pa = pa_clone.lock().unwrap();
-                            let _ = pa.insert(pid, weight as i64, 0);
-                        } else {
-                            // Optionally clear the action if latency has dropped
-                            let mut pa = pa_clone.lock().unwrap();
-                            let _ = pa.remove(&pid);
-                        }
+                        let mut pa = pa_clone.lock().unwrap();
+                        let _ = pa.insert(pid, weight as i64, 0);
                     }
                 }
             }
         }
     });
 
-    // 7. Attach eBPF Programs
+    // 6. Attach eBPF Programs
     attach_tracepoint(&mut bpf, "handle_sched_wakeup", "sched", "sched_wakeup")?;
     let switch_prog: &mut aya::programs::RawTracePoint = bpf.program_mut("handle_sched_switch").unwrap().try_into()?;
     switch_prog.load()?;
@@ -205,9 +200,8 @@ fn main() -> Result<()> {
     while running.load(Ordering::SeqCst) {
         while let Some(item) = events_ring.next() {
             if let Ok(event) = bytemuck::try_from_bytes::<KernelXEvent>(&item) {
-                // Only process "high-pain" events where latency > 1000us
+                // Telemetry recording still focuses on "high-pain" events
                 if event.features[23] > 1000 {
-                    // Persist to RadishDB
                     persistence::persist_event(event);
                     
                     let mut s = shared_state.lock().unwrap();
@@ -216,21 +210,12 @@ fn main() -> Result<()> {
                     s.active_pid = event.pid;
                     
                     // Copy to SHM
+                    let mut mmap = mmap_mutex.lock().unwrap();
                     mmap.copy_from_slice(bytemuck::bytes_of(&*s));
 
-                    // Record transition if enabled
                     if let Some(ref mut m) = manager {
-                        if let Err(e) = m.record_transition(*event) {
-                            eprintln!("[Error] Trajectory record failed: {e}");
-                        }
+                        let _ = m.record_transition(*event);
                     }
-
-                    println!(
-                        "24D | PID: {:<6} | Wait: {:>5}us | VRuntime: {:>10}",
-                        event.pid,
-                        event.features[23],
-                        event.features[5]
-                    );
                 }
             }
         }
@@ -240,8 +225,9 @@ fn main() -> Result<()> {
             let mut s = shared_state.lock().unwrap();
             s.core_heat = cpu_tracker.update();
             s.radish_wal_size = persistence::get_aof_size();
-            s.radish_dirty_pages = (s.radish_wal_size / 4096) as u32 % 100; // approximation
+            s.radish_dirty_pages = (s.radish_wal_size / 4096) as u32 % 100;
             
+            let mut mmap = mmap_mutex.lock().unwrap();
             mmap.copy_from_slice(bytemuck::bytes_of(&*s));
             last_infra_update = Instant::now();
         }

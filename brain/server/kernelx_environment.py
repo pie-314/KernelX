@@ -6,13 +6,13 @@ import mmap
 import zmq
 from typing import Tuple, Optional
 from openenv_core import Environment
-from ..models import Observation, Action, State
-from .policy import ManualPolicy
-from .trained_policy import TrainedPolicy
+from brain.models import Observation, Action, State
+from brain.server.policy import ManualPolicy
+from brain.server.trained_policy import TrainedPolicy
 
 
 SHM_PATH = "/dev/shm/kernelx_state"
-SHM_SIZE = 340
+SHM_SIZE = 376
 ZMQ_BRIDGE_URL = "tcp://127.0.0.1:5555"
 
 # Default GGUF model path (relative to project root)
@@ -116,27 +116,30 @@ class KernelXEnvironment(Environment[Observation, Action, State]):
 
     def _get_observation(self) -> Observation:
         if self.shm:
-            self.shm.seek(0)
-            data = self.shm.read(SHM_SIZE)
-            
-            # Unpack the 24D features (first 192 bytes, uint64)
-            features = np.frombuffer(data[:192], dtype=np.uint64).astype(float).tolist()
-            
-            # Unpack PID (at offset 196)
-            pid = int.from_bytes(data[196:200], "little")
-            
-            return Observation(
-                features=features,
-                timestamp=int(time.time_ns()),
-                pid=pid,
-                cpu=0
-            )
+            try:
+                self.shm.seek(0)
+                data = self.shm.read(SHM_SIZE)
+                
+                # features: [u64; 24] -> 192 bytes
+                features = np.frombuffer(data[:192], dtype=np.uint64).astype(float).tolist()
+                
+                # active_pid: u32 -> offset 196 (after current_action: f32 at 192)
+                pid = int.from_bytes(data[196:200], "little")
+                
+                return Observation(
+                    features=features,
+                    timestamp=int(time.time_ns()),
+                    pid=pid,
+                    cpu=0
+                )
+            except Exception as e:
+                print(f"[KernelX] SHM Read error: {e}")
         
-        # Fallback to random if SHM is missing
+        # Fallback to random if SHM is missing or fails
         return Observation(
             features=list(np.random.rand(24).astype(float)),
             timestamp=int(time.time_ns()),
-            pid=1234,
+            pid=0,
             cpu=0
         )
 
@@ -152,17 +155,19 @@ class KernelXEnvironment(Environment[Observation, Action, State]):
                 pid_bytes = self.shm.read(4)
                 active_pid = int.from_bytes(pid_bytes, "little")
                 
-                if active_pid > 0:
-                    # Format: "PID:WEIGHT:CONFIDENCE:DRIFT:REASONING"
-                    # Mocking confidence/drift here as placeholders for the AI to fill
-                    confidence = 0.92
-                    drift = 0.03
-                    reason = "Priority boost for latency-sensitive task"
-                    
-                    cmd = f"{active_pid}:{weight}:{confidence}:{drift}:{reason}"
-                    self.zmq_socket.send_string(cmd, zmq.NOBLOCK)
+                # If no active PID from kernel, use a dummy one for UI verification
+                target_pid = active_pid if active_pid > 0 else 9999
+                
+                # Format: "PID:WEIGHT:CONFIDENCE:DRIFT:REASONING"
+                confidence = 0.95
+                drift = 0.01
+                reason = "Autonomous policy nudge"
+                
+                cmd = f"{target_pid}:{weight}:{confidence}:{drift}:{reason}"
+                print(f"[KernelX] Sending ZMQ Action -> {cmd}")
+                self.zmq_socket.send_string(cmd, zmq.NOBLOCK)
             except Exception as e:
-                pass  # Silently ignore ZMQ errors
+                print(f"[KernelX] _apply_action failed: {e}")
 
     def _calculate_reward(self, obs: Observation) -> float:
         # R = -latency (simplified reward)

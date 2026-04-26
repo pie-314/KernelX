@@ -20,12 +20,7 @@ import numpy as np
 import sys
 import os
 
-# Handle both direct and package imports
-try:
-    from ..models import Action, Observation
-except ImportError:
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from models import Action, Observation
+from brain.models import Action, Observation
 
 
 class ManualPolicy:
@@ -149,39 +144,39 @@ class ManualPolicy:
         
         # 1. Under normal load: balanced scheduling
         if cpu_load < 0.3 and memory_pressure < 0.5:
-            weights = [10.0, 5.0, -5.0, -10.0]
+            weights = [-10.0, -5.0, 5.0, 10.0]
         
         # 2. Under moderate CPU load: prioritize interactive over batch
         elif cpu_load < 0.7:
             # Boost interactive, suppress batch
-            weights = [20.0, 15.0, -20.0, -15.0]
+            weights = [-20.0, -15.0, 20.0, 15.0]
         
         # 3. High CPU load: aggressive prioritization
         else:
             # Strongly prioritize critical/interactive, suppress batch/idle
-            weights = [50.0, 30.0, -50.0, -30.0]
+            weights = [-50.0, -30.0, 50.0, 30.0]
         
         # 4. High memory pressure: reduce batch workloads
         if memory_pressure > 0.8:
-            weights[2] -= 30.0  # penalize batch
-            weights[0] += 10.0  # boost critical for cleanup
+            weights[2] += 30.0  # penalize batch
+            weights[0] -= 10.0  # boost critical for cleanup
         
         # 5. High I/O activity: boost I/O-bound processes slightly
         if io_activity > 0.7:
-            weights[1] += 15.0  # interactive often does I/O
+            weights[1] -= 15.0  # interactive often does I/O
         
         # 6. Rising latency: boost critical processes
         if latency_trend > 0.5:
-            weights[0] += 20.0
-            weights[1] += 10.0
-            weights[2] -= 10.0
+            weights[0] -= 20.0
+            weights[1] -= 10.0
+            weights[2] += 10.0
         
         # 7. High latency spike: emergency boost
         if latency > 100.0:  # arbitrary threshold
-            weights[0] = 80.0
-            weights[1] = 40.0
-            weights[2] = -60.0
-            weights[3] = -80.0
+            weights[0] = -80.0
+            weights[1] = -40.0
+            weights[2] = 60.0
+            weights[3] = 80.0
         
         # Clamp all weights to valid range
         weights = [float(np.clip(w, -100.0, 100.0)) for w in weights]

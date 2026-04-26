@@ -11,10 +11,6 @@ use crate::telemetry::{read, ConnectionStatus, TelemetrySnapshot, TelemetrySourc
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Screen {
     Dashboard,
-    EventFlow,
-    Judging,
-    Submission,
-    System,
 }
 
 pub struct NudgedProcess {

@@ -1,6 +1,6 @@
 from openenv.core import create_fastapi_app
-from .kernelx_environment import KernelXEnvironment
-from ..models import Observation, Action
+from brain.server.kernelx_environment import KernelXEnvironment
+from brain.models import Observation, Action
 
 # Create the FastAPI app with OpenEnv routing
 # Pass the class itself, as the server will instantiate it

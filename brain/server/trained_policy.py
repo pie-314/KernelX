@@ -14,12 +14,7 @@ Usage:
 import re
 import numpy as np
 
-try:
-    from ..models import Action, Observation
-except ImportError:
-    import sys, os
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from models import Action, Observation
+from brain.models import Action, Observation
 
 
 # ---------------------------------------------------------------------------
@@ -68,14 +63,14 @@ def action_to_weights(action_value):
     scale = abs(a) * 100.0
 
     if a < -0.1:
-        # Boost: promote real-time and interactive
-        return [scale, scale * 0.6, -scale * 0.5, -scale * 0.3]
+        # Boost: negative weights to promote
+        return [-scale, -scale * 0.6, scale * 0.5, scale * 0.3]
     elif a > 0.1:
-        # Demote: suppress real-time, promote batch
-        return [-scale * 0.3, -scale * 0.5, scale * 0.6, scale]
+        # Demote: positive weights to suppress
+        return [scale * 0.3, scale * 0.5, -scale * 0.6, -scale]
     else:
         # Neutral: minimal adjustment
-        return [5.0, 2.0, -2.0, -5.0]
+        return [-5.0, -2.0, 2.0, 5.0]
 
 
 class TrainedPolicy:
